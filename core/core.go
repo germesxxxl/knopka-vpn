@@ -76,6 +76,11 @@ func Start(homeDir string, configYAML string, tunFd int32) error {
 
 	if !listener.GetTunConf().Enable {
 		msg := lastLogContaining("TUN")
+		// Listener construction can fail before sing-tun wraps the duplicated
+		// Android descriptor (for example while preparing platform rules). In
+		// that path no listener owns coreFd, so close it here or Android keeps a
+		// ghost VPN network alive after the service reports the startup error.
+		_ = unix.Close(coreFd)
 		shutdownLocked()
 		if msg == "" {
 			msg = "unknown error"
