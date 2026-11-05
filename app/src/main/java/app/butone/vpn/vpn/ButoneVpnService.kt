@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
+import android.os.SystemClock
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -18,11 +19,14 @@ import app.butone.vpn.data.SubscriptionRepository
 import app.butone.vpn.ui.MainActivity
 import core.Core
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -34,7 +38,8 @@ class ButoneVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
     private var tun: ParcelFileDescriptor? = null
-    private var background: Job? = null
+    private var monitorJob: Job? = null
+    private var refreshJob: Job? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -53,12 +58,14 @@ class ButoneVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        background?.cancel()
+        monitorJob?.cancel()
+        refreshJob?.cancel()
+        scope.cancel()
         if (Core.isRunning()) Core.stop()
         tun?.close()
         tun = null
+        VpnState.apiSecret = null
         if (VpnState.status.value !is VpnStatus.Error) VpnState.set(VpnStatus.Disconnected)
-        scope.cancel()
         super.onDestroy()
     }
 
@@ -88,14 +95,13 @@ class ButoneVpnService : VpnService() {
 
             val secret = UUID.randomUUID().toString()
             VpnState.apiSecret = secret
-            // Mihomo takes ownership of the duplicate and closes it on shutdown.
-            val coreFd = pfd.dup().detachFd()
-            Core.start(repo.homeDir.absolutePath, ConfigBuilder.build(coreFd, sources, secret))
+            // Go duplicates this descriptor only after validating the config;
+            // sing-tun owns and closes that duplicate on shutdown.
+            Core.start(repo.homeDir.absolutePath, ConfigBuilder.build(sources, secret), pfd.fd)
 
-            VpnState.set(VpnStatus.Connected())
             val names = sources.map { it.id }.toSet()
-            background = scope.launch { monitor(CoreApi(secret), names) }
-            scope.launch { refreshSubscriptions(repo, CoreApi(secret)) }
+            monitorJob = scope.launch { monitor(CoreApi(secret), names) }
+            refreshJob = scope.launch { refreshSubscriptions(repo, CoreApi(secret)) }
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
             stopVpnLocked(VpnStatus.Error(e.message ?: e.toString()))
@@ -103,8 +109,10 @@ class ButoneVpnService : VpnService() {
     }
 
     private fun stopVpnLocked(finalStatus: VpnStatus = VpnStatus.Disconnected) {
-        background?.cancel()
-        background = null
+        monitorJob?.cancel()
+        refreshJob?.cancel()
+        monitorJob = null
+        refreshJob = null
         try {
             if (Core.isRunning()) Core.stop()
         } catch (e: Exception) {
@@ -112,6 +120,7 @@ class ButoneVpnService : VpnService() {
         }
         tun?.close()
         tun = null
+        VpnState.apiSecret = null
         VpnState.set(finalStatus)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -121,12 +130,41 @@ class ButoneVpnService : VpnService() {
     private suspend fun monitor(api: CoreApi, providers: Set<String>) {
         val nm = getSystemService(android.app.NotificationManager::class.java)
         var since: Long? = null
-        while (scope.isActive) {
+        var probedNode: String? = null
+        var probeSucceeded = false
+        var lastProbeAt = 0L
+        var unavailableSince = SystemClock.elapsedRealtime()
+        var pollFailures = 0
+
+        while (currentCoroutineContext().isActive) {
             try {
                 val s = api.status(providers)
+                currentCoroutineContext().ensureActive()
+                pollFailures = 0
+                val now = SystemClock.elapsedRealtime()
+                val candidateReady = s.node != null && s.currentAlive && s.delayMs != null
+                val probeInterval = if (probeSucceeded && probedNode == s.node) 60_000L else 10_000L
+                if (candidateReady && (probedNode != s.node || now - lastProbeAt >= probeInterval)) {
+                    probedNode = s.node
+                    lastProbeAt = now
+                    probeSucceeded = runCatching { api.probeSelected() > 0 }
+                        .onFailure { Log.w(TAG, "outbound probe: $it") }
+                        .getOrDefault(false)
+                    currentCoroutineContext().ensureActive()
+                } else if (!candidateReady) {
+                    probeSucceeded = false
+                    probedNode = s.node
+                }
+
                 val pretty = s.node?.let { CoreApi.prettyName(it) }
-                val ready = pretty != null && s.delayMs != null
-                if (ready && since == null) since = System.currentTimeMillis()
+                val ready = candidateReady && probeSucceeded && pretty != null
+                if (ready) {
+                    if (since == null) since = System.currentTimeMillis()
+                    unavailableSince = 0L
+                } else {
+                    since = null
+                    if (unavailableSince == 0L) unavailableSince = now
+                }
                 VpnState.set(
                     VpnStatus.Connected(
                         node = if (ready) pretty else null,
@@ -138,26 +176,83 @@ class ButoneVpnService : VpnService() {
                 )
                 val text = if (ready) "Подключено · $pretty · ${s.delayMs} мс" else "Подбираем лучший сервер…"
                 nm.notify(NOTIFICATION_ID, notification(getString(R.string.app_name), text))
+                if (!ready && now - unavailableSince >= CONNECTION_TIMEOUT_MS) {
+                    failConnection("Не найден рабочий сервер. Проверьте сеть и попробуйте ещё раз.")
+                    return
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                pollFailures++
                 Log.w(TAG, "status poll: $e")
+                val now = SystemClock.elapsedRealtime()
+                if (unavailableSince == 0L) unavailableSince = now
+                if (pollFailures >= 2) {
+                    since = null
+                    probeSucceeded = false
+                    VpnState.set(VpnStatus.Connecting)
+                    nm.notify(
+                        NOTIFICATION_ID,
+                        notification(getString(R.string.app_name), "Проверяем соединение…"),
+                    )
+                }
+                if (now - unavailableSince >= CONNECTION_TIMEOUT_MS) {
+                    failConnection("Соединение потеряно. Проверьте сеть и попробуйте ещё раз.")
+                    return
+                }
             }
             delay(if (VpnState.status.value.let { it is VpnStatus.Connected && it.node != null }) 5_000L else 1_500L)
+        }
+    }
+
+    private fun failConnection(message: String) {
+        scope.launch {
+            lock.withLock {
+                if (tun != null) stopVpnLocked(VpnStatus.Error(message))
+            }
         }
     }
 
     /** Fetches stale lists through Mihomo's own proxy, so blocked mirrors still work. */
     private suspend fun refreshSubscriptions(repo: SubscriptionRepository, api: CoreApi) {
         delay(15_000L) // let the first node selection settle
-        for (source in repo.staleSources()) {
-            if (repo.download(source, proxyPort = ConfigBuilder.MIXED_PORT) ||
-                repo.download(source, proxyPort = null)
-            ) {
+        while (currentCoroutineContext().isActive) {
+            for (source in repo.staleSources()) {
+                currentCoroutineContext().ensureActive()
+                val proxyReady = runCatching { api.probeSelected() > 0 }.getOrDefault(false)
+                val update = if (proxyReady) {
+                    repo.download(source, proxyPort = ConfigBuilder.MIXED_PORT)
+                        ?: repo.download(source, proxyPort = null)
+                } else {
+                    repo.download(source, proxyPort = null)
+                        ?: repo.download(source, proxyPort = ConfigBuilder.MIXED_PORT)
+                } ?: continue
+
+                currentCoroutineContext().ensureActive()
+                val installed = try {
+                    repo.install(update)
+                } catch (e: Exception) {
+                    repo.discard(update)
+                    Log.w(TAG, "install ${source.id}: $e")
+                    continue
+                }
+
                 try {
                     api.reloadProvider(source.id)
+                    currentCoroutineContext().ensureActive()
+                    repo.commit(installed)
+                    Log.i(TAG, "updated provider ${source.id}")
+                } catch (e: CancellationException) {
+                    repo.rollback(installed)
+                    runCatching { api.reloadProvider(source.id) }
+                    throw e
                 } catch (e: Exception) {
+                    repo.rollback(installed)
+                    runCatching { api.reloadProvider(source.id) }
                     Log.w(TAG, "reload ${source.id}: $e")
                 }
             }
+            delay(REFRESH_RETRY_MS)
         }
     }
 
@@ -192,6 +287,8 @@ class ButoneVpnService : VpnService() {
     companion object {
         private const val TAG = "ButoneVpn"
         private const val NOTIFICATION_ID = 1
+        private const val CONNECTION_TIMEOUT_MS = 120_000L
+        private const val REFRESH_RETRY_MS = 30 * 60 * 1000L
         const val ACTION_START = "app.butone.vpn.START"
         const val ACTION_STOP = "app.butone.vpn.STOP"
 

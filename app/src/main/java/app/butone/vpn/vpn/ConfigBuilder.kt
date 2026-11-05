@@ -17,12 +17,14 @@ object ConfigBuilder {
     const val MIXED_PORT = 7890
     private const val TEST_URL = "https://www.gstatic.com/generate_204"
 
-    fun build(tunFd: Int, sources: List<Source>, secret: String): String {
+    fun build(sources: List<Source>, secret: String): String {
         val providers = sources.joinToString("\n") { s ->
             """
             |  ${s.id}:
             |    type: file
             |    path: ./providers/${s.id}.yaml
+            |    override:
+            |      skip-cert-verify: false
             |    health-check:
             |      enable: true
             |      url: $TEST_URL
@@ -39,7 +41,7 @@ object ConfigBuilder {
             |bind-address: 127.0.0.1
             |allow-lan: false
             |mode: rule
-            |log-level: warning
+            |log-level: info
             |ipv6: false
             |unified-delay: true
             |tcp-concurrent: true
@@ -54,7 +56,6 @@ object ConfigBuilder {
             |  enable: true
             |  device: butone
             |  stack: gvisor
-            |  file-descriptor: $tunFd
             |  inet4-address: [172.19.0.1/30]
             |  inet6-address: ["fdfe:dcba:9876::1/126"]
             |  mtu: 1500
@@ -65,6 +66,7 @@ object ConfigBuilder {
             |dns:
             |  enable: true
             |  ipv6: false
+            |  respect-rules: true
             |  enhanced-mode: fake-ip
             |  fake-ip-range: 198.18.0.1/16
             |  fake-ip-filter: ['*.lan', '*.local', 'localhost', '+.pool.ntp.org', 'time.*.com', 'ntp.*.com', '+.msftconnecttest.com', '+.msftncsi.com', '+.stun.*.*', '+.stun.*.*.*']

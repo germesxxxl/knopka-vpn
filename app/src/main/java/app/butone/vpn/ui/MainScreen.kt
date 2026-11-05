@@ -320,7 +320,7 @@ private fun SessionTimer(since: Long) {
     }
     val sec = ((now - since) / 1000).coerceAtLeast(0)
     val text = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
-    Text("⏱ $text в защите", color = Palette.TextDim, fontSize = 15.sp)
+    Text("⏱ $text VPN подключён", color = Palette.TextDim, fontSize = 15.sp)
 }
 
 /** Unified-delay ping (includes the TLS handshake), so thresholds are generous. */

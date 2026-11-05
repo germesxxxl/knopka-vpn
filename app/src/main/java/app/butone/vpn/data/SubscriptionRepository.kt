@@ -2,11 +2,17 @@ package app.butone.vpn.data
 
 import android.content.Context
 import android.util.Log
+import core.Core
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Keeps one cached YAML file per [Source] under `filesDir/mihomo/providers`.
@@ -18,11 +24,15 @@ import java.net.URL
  */
 class SubscriptionRepository(private val context: Context) {
 
+    data class PendingUpdate(val source: Source, val candidate: File)
+    data class InstalledUpdate(val source: Source, val backup: File?)
+
     val homeDir = File(context.filesDir, "mihomo")
     private val providerDir = File(homeDir, "providers")
     private val ruleDir = File(homeDir, "rules")
 
     fun providerFile(source: Source) = File(providerDir, "${source.id}.yaml")
+    private fun stampFile(source: Source) = File(providerDir, "${source.id}.updated")
 
     /** Prepares provider and rule files without touching the network. Returns usable sources. */
     fun prepareOffline(): List<Source> {
@@ -32,21 +42,30 @@ class SubscriptionRepository(private val context: Context) {
 
         return Sources.all.filter { source ->
             val file = providerFile(source)
-            if (!isValid(file)) copyAsset("subs/${source.id}.yaml", file, overwrite = true)
+            if (!isValid(file)) {
+                // An asset snapshot has no network freshness timestamp, so it
+                // will be refreshed during this first active session.
+                stampFile(source).delete()
+                copyAsset("subs/${source.id}.yaml", file, overwrite = true)
+            }
             isValid(file)
         }
     }
 
     fun staleSources(maxAgeMs: Long = MAX_AGE_MS): List<Source> {
         val now = System.currentTimeMillis()
-        return Sources.all.filter { now - providerFile(it).lastModified() > maxAgeMs }
+        return Sources.all.filter { source ->
+            val stamp = stampFile(source)
+            !stamp.exists() || now - stamp.lastModified() > maxAgeMs
+        }
     }
 
     /**
      * Downloads [source] trying each mirror, optionally through a local HTTP proxy.
-     * Writes atomically and only if the content looks like a Clash config.
+     * Downloads to a candidate file. The active file is replaced separately so
+     * the caller can ask Mihomo to parse it and roll back on failure.
      */
-    fun download(source: Source, proxyPort: Int? = null): Boolean {
+    fun download(source: Source, proxyPort: Int? = null): PendingUpdate? {
         val proxy = proxyPort?.let { Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", it)) }
             ?: Proxy.NO_PROXY
         for (url in source.urls) {
@@ -57,31 +76,90 @@ class SubscriptionRepository(private val context: Context) {
                 conn.setRequestProperty("User-Agent", "clash.meta")
                 val body = try {
                     if (conn.responseCode != 200) continue
-                    conn.inputStream.use { it.readBytes() }
+                    conn.inputStream.use { input ->
+                        val output = ByteArrayOutputStream()
+                        val buffer = ByteArray(16 * 1024)
+                        var total = 0
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > MAX_DOWNLOAD_BYTES) {
+                                throw IOException("provider exceeds $MAX_DOWNLOAD_BYTES bytes")
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toByteArray()
+                    }
                 } finally {
                     conn.disconnect()
                 }
-                if (!looksLikeClash(body)) continue
+                if (!isValid(body)) continue
 
-                val target = providerFile(source)
-                val tmp = File(target.path + ".tmp")
-                tmp.writeBytes(body)
-                if (tmp.renameTo(target)) return true
+                val candidate = File(providerDir, "${source.id}.download")
+                candidate.writeBytes(body)
+                return PendingUpdate(source, candidate)
             } catch (e: Exception) {
                 Log.w(TAG, "download ${source.id} from $url failed: $e")
             }
         }
-        return false
+        return null
     }
 
-    private fun isValid(file: File) =
-        file.exists() && file.length() > 512 && looksLikeClash(file.readBytes())
-
-    private fun looksLikeClash(body: ByteArray): Boolean {
-        if (body.size < 512) return false
-        val text = String(body, Charsets.UTF_8)
-        return text.contains("\nproxies:") || text.startsWith("proxies:")
+    /** Replaces the active file while keeping a rollback copy. */
+    fun install(update: PendingUpdate): InstalledUpdate {
+        val target = providerFile(update.source)
+        val backup = File(providerDir, "${update.source.id}.bak")
+        backup.delete()
+        val saved = if (target.exists()) {
+            Files.copy(target.toPath(), backup.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            backup
+        } else {
+            null
+        }
+        moveReplacing(update.candidate, target)
+        return InstalledUpdate(update.source, saved)
     }
+
+    fun commit(update: InstalledUpdate) {
+        update.backup?.delete()
+        val stamp = stampFile(update.source)
+        stamp.writeText(System.currentTimeMillis().toString())
+    }
+
+    fun rollback(update: InstalledUpdate) {
+        val target = providerFile(update.source)
+        if (update.backup?.exists() == true) {
+            moveReplacing(update.backup, target)
+        } else {
+            target.delete()
+        }
+    }
+
+    fun discard(update: PendingUpdate) {
+        update.candidate.delete()
+    }
+
+    private fun moveReplacing(from: File, to: File) {
+        try {
+            Files.move(
+                from.toPath(), to.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(from.toPath(), to.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    private fun isValid(file: File): Boolean {
+        if (!file.exists() || file.length() <= 0 || file.length() > MAX_DOWNLOAD_BYTES.toLong()) return false
+        return isValid(file.readBytes())
+    }
+
+    private fun isValid(body: ByteArray): Boolean = runCatching {
+        Core.validateProvider(String(body, Charsets.UTF_8))
+    }.isSuccess
 
     private fun copyAsset(assetPath: String, target: File, overwrite: Boolean) {
         if (target.exists() && !overwrite) return
@@ -96,6 +174,7 @@ class SubscriptionRepository(private val context: Context) {
 
     companion object {
         private const val TAG = "Subscriptions"
+        private const val MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024
         const val MAX_AGE_MS = 3 * 60 * 60 * 1000L
         val RULE_FILES = listOf("category-ru.mrs", "geoip-ru.mrs")
     }
