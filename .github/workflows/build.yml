@@ -41,7 +41,7 @@ jobs:
           gomobile init
           mkdir -p ../app/libs
           gomobile bind -v \
-            -tags with_gvisor -trimpath \
+            -tags with_gvisor,cmfa -trimpath \
             -ldflags "-s -w -buildid= -X 'github.com/metacubex/mihomo/constant.Version=${MIHOMO_VERSION}'" \
             -androidapi 26 \
             -target android/arm64,android/arm,android/amd64 \

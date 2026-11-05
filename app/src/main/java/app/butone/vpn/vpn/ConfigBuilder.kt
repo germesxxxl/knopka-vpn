@@ -72,8 +72,8 @@ object ConfigBuilder {
             |  fake-ip-filter: ['*.lan', '*.local', 'localhost', '+.pool.ntp.org', 'time.*.com', 'ntp.*.com', '+.msftconnecttest.com', '+.msftncsi.com', '+.stun.*.*', '+.stun.*.*.*']
             |  default-nameserver: [77.88.8.8, 8.8.8.8, 1.1.1.1]
             |  nameserver: [https://dns.google/dns-query, https://cloudflare-dns.com/dns-query, https://dns.quad9.net/dns-query]
-            |  proxy-server-nameserver: [77.88.8.8, 8.8.8.8, 1.1.1.1, system]
-            |  direct-nameserver: [77.88.8.8, 77.88.8.1, system]
+            |  proxy-server-nameserver: [77.88.8.8, 8.8.8.8, 1.1.1.1]
+            |  direct-nameserver: [77.88.8.8, 77.88.8.1]
             |
             |sniffer:
             |  enable: true
