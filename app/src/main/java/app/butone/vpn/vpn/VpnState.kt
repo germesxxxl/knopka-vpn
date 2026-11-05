@@ -29,6 +29,10 @@ object VpnState {
         _status.value = status
     }
 
+    /** Secret for Mihomo's local controller API of the current session (for diagnostics). */
+    @Volatile
+    var apiSecret: String? = null
+
     val isActive: Boolean
         get() = status.value is VpnStatus.Connected || status.value is VpnStatus.Connecting
 }

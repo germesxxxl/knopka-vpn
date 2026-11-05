@@ -36,6 +36,9 @@ class CoreApi(private val secret: String) {
         return Status(now, delay?.takeIf { it > 0 }, alive, total)
     }
 
+    /** Raw /connections: totals plus every live connection with its inbound type and chain. */
+    fun connections(): JSONObject = JSONObject(get("/connections"))
+
     /** Makes a file provider re-read its file, then re-tests its nodes. */
     fun reloadProvider(name: String) {
         request("PUT", "/providers/proxies/${enc(name)}")

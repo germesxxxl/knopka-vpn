@@ -20,6 +20,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -79,7 +83,7 @@ private fun phaseOf(s: VpnStatus) = when (s) {
 }
 
 @Composable
-fun MainScreen(status: VpnStatus, onToggle: () -> Unit) {
+fun MainScreen(status: VpnStatus, onToggle: () -> Unit, onReport: () -> Unit) {
     val phase = phaseOf(status)
     val anim = tween<Color>(700)
     val bgTop by animateColorAsState(
@@ -106,14 +110,19 @@ fun MainScreen(status: VpnStatus, onToggle: () -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                "butone",
-                color = Color.White,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 1.sp,
-                modifier = Modifier.padding(top = 8.dp),
-            )
+            Box(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                Text(
+                    "butone",
+                    color = Color.White,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                TextButton(onClick = onReport, modifier = Modifier.align(Alignment.CenterEnd)) {
+                    Text("Отчёт", color = Palette.TextDim, fontSize = 13.sp)
+                }
+            }
 
             Spacer(Modifier.weight(1f))
             PowerButton(phase, onToggle)
@@ -342,6 +351,24 @@ fun parseNode(pretty: String): NodeLabel {
         )
     }
     return NodeLabel("🌐", pretty.substringBefore(",").ifBlank { "Сервер" }, pretty.substringAfter(", ", ""))
+}
+
+@Composable
+fun ReportDialog(text: String?, onCopy: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onCopy, enabled = text != null) { Text("Скопировать") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
+        title = { Text("Отчёт для разработчика") },
+        text = {
+            Text(
+                text ?: "Собираем…",
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+            )
+        },
+    )
 }
 
 @Composable

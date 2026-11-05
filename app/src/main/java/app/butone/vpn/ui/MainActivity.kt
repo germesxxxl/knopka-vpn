@@ -1,6 +1,13 @@
 package app.butone.vpn.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
@@ -41,9 +48,34 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Palette.Green)) {
                 var showDisclaimer by remember { mutableStateOf(!prefs.getBoolean("disclaimer_ok", false)) }
+                var showReport by remember { mutableStateOf(false) }
+                var report by remember { mutableStateOf<String?>(null) }
+                val scope = rememberCoroutineScope()
                 val status by VpnState.status.collectAsStateWithLifecycle()
 
-                MainScreen(status = status, onToggle = { toggle() })
+                MainScreen(
+                    status = status,
+                    onToggle = { toggle() },
+                    onReport = {
+                        showReport = true
+                        report = null
+                        scope.launch {
+                            report = withContext(Dispatchers.IO) { Diagnostics.report(this@MainActivity) }
+                        }
+                    },
+                )
+
+                if (showReport) {
+                    ReportDialog(
+                        text = report,
+                        onCopy = {
+                            val cm = getSystemService(ClipboardManager::class.java)
+                            cm.setPrimaryClip(ClipData.newPlainText("butone report", report))
+                            Toast.makeText(this@MainActivity, "Скопировано. Отправьте разработчику.", Toast.LENGTH_SHORT).show()
+                        },
+                        onDismiss = { showReport = false },
+                    )
+                }
 
                 if (showDisclaimer) {
                     Disclaimer(onAccept = {

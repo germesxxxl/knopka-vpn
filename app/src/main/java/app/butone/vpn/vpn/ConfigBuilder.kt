@@ -52,6 +52,7 @@ object ConfigBuilder {
             |
             |tun:
             |  enable: true
+            |  device: butone
             |  stack: gvisor
             |  file-descriptor: $tunFd
             |  inet4-address: [172.19.0.1/30]

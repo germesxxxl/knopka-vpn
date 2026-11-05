@@ -87,6 +87,7 @@ class ButoneVpnService : VpnService() {
             tun = pfd
 
             val secret = UUID.randomUUID().toString()
+            VpnState.apiSecret = secret
             // Mihomo takes ownership of the duplicate and closes it on shutdown.
             val coreFd = pfd.dup().detachFd()
             Core.start(repo.homeDir.absolutePath, ConfigBuilder.build(coreFd, sources, secret))
