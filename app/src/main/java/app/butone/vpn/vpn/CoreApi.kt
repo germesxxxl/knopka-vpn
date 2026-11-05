@@ -1,4 +1,4 @@
-package app.knopka.vpn.vpn
+package app.butone.vpn.vpn
 
 import org.json.JSONObject
 import java.net.HttpURLConnection

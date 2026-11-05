@@ -1,4 +1,4 @@
-module knopka/core
+module butone/core
 
 go 1.26
 

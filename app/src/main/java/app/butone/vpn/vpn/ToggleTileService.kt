@@ -1,4 +1,4 @@
-package app.knopka.vpn.vpn
+package app.butone.vpn.vpn
 
 import android.annotation.SuppressLint
 import android.app.PendingIntent
@@ -7,7 +7,7 @@ import android.net.VpnService
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import app.knopka.vpn.ui.MainActivity
+import app.butone.vpn.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,10 +30,10 @@ class ToggleTileService : TileService() {
 
     override fun onClick() {
         when {
-            VpnState.isActive -> KnopkaVpnService.stop(this)
+            VpnState.isActive -> ButoneVpnService.stop(this)
             // VPN permission not granted yet: it can only be requested from an activity.
             VpnService.prepare(this) != null -> openApp()
-            else -> KnopkaVpnService.start(this)
+            else -> ButoneVpnService.start(this)
         }
     }
 

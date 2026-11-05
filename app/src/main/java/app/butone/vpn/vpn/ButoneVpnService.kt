@@ -1,4 +1,4 @@
-package app.knopka.vpn.vpn
+package app.butone.vpn.vpn
 
 import android.app.Notification
 import android.app.PendingIntent
@@ -12,10 +12,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
-import app.knopka.vpn.App
-import app.knopka.vpn.R
-import app.knopka.vpn.data.SubscriptionRepository
-import app.knopka.vpn.ui.MainActivity
+import app.butone.vpn.App
+import app.butone.vpn.R
+import app.butone.vpn.data.SubscriptionRepository
+import app.butone.vpn.ui.MainActivity
 import core.Core
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +29,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
-class KnopkaVpnService : VpnService() {
+class ButoneVpnService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
@@ -119,17 +119,20 @@ class KnopkaVpnService : VpnService() {
     /** Polls the core for the selected node and ping; updates UI state and notification. */
     private suspend fun monitor(api: CoreApi, providers: Set<String>) {
         val nm = getSystemService(android.app.NotificationManager::class.java)
+        var since: Long? = null
         while (scope.isActive) {
             try {
                 val s = api.status(providers)
                 val pretty = s.node?.let { CoreApi.prettyName(it) }
                 val ready = pretty != null && s.delayMs != null
+                if (ready && since == null) since = System.currentTimeMillis()
                 VpnState.set(
                     VpnStatus.Connected(
                         node = if (ready) pretty else null,
                         delayMs = s.delayMs,
                         alive = s.alive,
                         total = s.total,
+                        since = since,
                     )
                 )
                 val text = if (ready) "Подключено · $pretty · ${s.delayMs} мс" else "Подбираем лучший сервер…"
@@ -164,7 +167,7 @@ class KnopkaVpnService : VpnService() {
 
     private fun notification(title: String, text: String): Notification {
         val stop = PendingIntent.getService(
-            this, 1, Intent(this, KnopkaVpnService::class.java).setAction(ACTION_STOP),
+            this, 1, Intent(this, ButoneVpnService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, App.CHANNEL_ID)
@@ -186,19 +189,19 @@ class KnopkaVpnService : VpnService() {
     }
 
     companion object {
-        private const val TAG = "KnopkaVpn"
+        private const val TAG = "ButoneVpn"
         private const val NOTIFICATION_ID = 1
-        const val ACTION_START = "app.knopka.vpn.START"
-        const val ACTION_STOP = "app.knopka.vpn.STOP"
+        const val ACTION_START = "app.butone.vpn.START"
+        const val ACTION_STOP = "app.butone.vpn.STOP"
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
-                context, Intent(context, KnopkaVpnService::class.java).setAction(ACTION_START)
+                context, Intent(context, ButoneVpnService::class.java).setAction(ACTION_START)
             )
         }
 
         fun stop(context: Context) {
-            context.startService(Intent(context, KnopkaVpnService::class.java).setAction(ACTION_STOP))
+            context.startService(Intent(context, ButoneVpnService::class.java).setAction(ACTION_STOP))
         }
     }
 }

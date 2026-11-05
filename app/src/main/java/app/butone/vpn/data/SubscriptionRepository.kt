@@ -1,4 +1,4 @@
-package app.knopka.vpn.data
+package app.butone.vpn.data
 
 import android.content.Context
 import android.util.Log

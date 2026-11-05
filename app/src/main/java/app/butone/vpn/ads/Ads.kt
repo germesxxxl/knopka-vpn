@@ -1,4 +1,4 @@
-package app.knopka.vpn.ads
+package app.butone.vpn.ads
 
 import android.app.Activity
 import android.content.Context

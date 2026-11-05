@@ -1,6 +1,6 @@
-package app.knopka.vpn.vpn
+package app.butone.vpn.vpn
 
-import app.knopka.vpn.data.Source
+import app.butone.vpn.data.Source
 
 /**
  * Builds the complete Mihomo config. Design choices:

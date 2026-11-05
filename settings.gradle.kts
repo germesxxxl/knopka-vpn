@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "KnopkaVPN"
+rootProject.name = "butone"
 include(":app")

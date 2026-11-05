@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bundles rule sets and a snapshot of the server lists into the APK, so the
 # first connect works offline / with GitHub blocked. Keep the subscription
-# list in sync with app/src/main/java/app/knopka/vpn/data/Sources.kt.
+# list in sync with app/src/main/java/app/butone/vpn/data/Sources.kt.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 A=app/src/main/assets

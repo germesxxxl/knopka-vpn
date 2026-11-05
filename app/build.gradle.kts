@@ -5,15 +5,26 @@ plugins {
 }
 
 android {
-    namespace = "app.knopka.vpn"
+    namespace = "app.butone.vpn"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.knopka.vpn"
+        applicationId = "app.butone.vpn"
         minSdk = 26
         targetSdk = 35
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("VERSION_NAME") ?: "0.1.0"
+    }
+
+    // The Mihomo core (libgojni.so, ~64 MB) is otherwise stored uncompressed;
+    // compressing it cuts the download several times at the cost of extraction on install.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            // No 32-bit x86 core is built (see gomobile -target in CI); drop the
+            // stray androidx lib so x86 devices fail at install, not at runtime.
+            excludes += "lib/x86/**"
+        }
     }
 
     // Release signing is configured only when the keystore secrets are present (CI).

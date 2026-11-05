@@ -1,9 +1,9 @@
-package app.knopka.vpn
+package app.butone.vpn
 
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import app.knopka.vpn.ads.Ads
+import app.butone.vpn.ads.Ads
 
 class App : Application() {
     override fun onCreate() {

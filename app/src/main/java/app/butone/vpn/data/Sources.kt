@@ -1,4 +1,4 @@
-package app.knopka.vpn.data
+package app.butone.vpn.data
 
 /**
  * A public, auto-updated Clash/Mihomo subscription. [urls] are mirrors of the

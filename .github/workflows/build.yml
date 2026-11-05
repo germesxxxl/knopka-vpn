@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -86,7 +86,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: knopka-vpn-apk
+          name: butone-apk
           path: app/build/outputs/apk/${{ steps.sign.outputs.dir }}/*.apk
 
       - name: Publish release
