@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.butone.vpn.vpn.ButoneVpnService
 import app.butone.vpn.vpn.VpnState
 import app.butone.vpn.vpn.VpnStatus
+import kotlinx.coroutines.delay
 
 /** Ten-foot interface used only by Android TV / Google TV launchers. */
 class TvActivity : ComponentActivity() {
@@ -105,7 +106,10 @@ private fun TvScreen(status: VpnStatus, onToggle: () -> Unit) {
     )
     val focusRequester = remember { FocusRequester() }
     var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    LaunchedEffect(Unit) {
+        delay(300)
+        focusRequester.requestFocus()
+    }
 
     Box(
         Modifier
@@ -200,7 +204,10 @@ private fun TvScreen(status: VpnStatus, onToggle: () -> Unit) {
 private fun TvDisclaimer(onAccept: () -> Unit) {
     val requester = remember { FocusRequester() }
     var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { requester.requestFocus() }
+    LaunchedEffect(Unit) {
+        delay(300)
+        requester.requestFocus()
+    }
     Box(
         Modifier.fillMaxSize().background(Color(0xFF080C11)).padding(80.dp),
         contentAlignment = Alignment.Center,
