@@ -101,7 +101,7 @@ class ButoneVpnService : VpnService() {
 
             val names = sources.map { it.id }.toSet()
             monitorJob = scope.launch { monitor(CoreApi(secret), names) }
-            refreshJob = scope.launch { refreshSubscriptions(repo, CoreApi(secret)) }
+            refreshJob = scope.launch { refreshSubscriptions(repo, CoreApi(secret), names) }
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
             stopVpnLocked(VpnStatus.Error(e.message ?: e.toString()))
@@ -214,9 +214,19 @@ class ButoneVpnService : VpnService() {
     }
 
     /** Fetches stale lists through Mihomo's own proxy, so blocked mirrors still work. */
-    private suspend fun refreshSubscriptions(repo: SubscriptionRepository, api: CoreApi) {
+    private suspend fun refreshSubscriptions(
+        repo: SubscriptionRepository,
+        api: CoreApi,
+        activeProviders: Set<String>,
+    ) {
         delay(15_000L) // let the first node selection settle
         while (currentCoroutineContext().isActive) {
+            val proxyReady = runCatching { api.probeSelected() > 0 }.getOrDefault(false)
+            if (proxyReady) {
+                if (!repo.refreshCatalog(ConfigBuilder.MIXED_PORT)) repo.refreshCatalog(null)
+            } else {
+                if (!repo.refreshCatalog(null)) repo.refreshCatalog(ConfigBuilder.MIXED_PORT)
+            }
             for (source in repo.staleSources()) {
                 currentCoroutineContext().ensureActive()
                 val proxyReady = runCatching { api.probeSelected() > 0 }.getOrDefault(false)
@@ -238,7 +248,7 @@ class ButoneVpnService : VpnService() {
                 }
 
                 try {
-                    api.reloadProvider(source.id)
+                    if (source.id in activeProviders) api.reloadProvider(source.id)
                     currentCoroutineContext().ensureActive()
                     repo.commit(installed)
                     Log.i(TAG, "updated provider ${source.id}")

@@ -30,6 +30,8 @@ class SubscriptionRepository(private val context: Context) {
     val homeDir = File(context.filesDir, "mihomo")
     private val providerDir = File(homeDir, "providers")
     private val ruleDir = File(homeDir, "rules")
+    private val catalogFile = File(homeDir, "source-catalog.json")
+    private var sources = SourceCatalog.load(catalogFile)
 
     fun providerFile(source: Source) = File(providerDir, "${source.id}.yaml")
     private fun stampFile(source: Source) = File(providerDir, "${source.id}.updated")
@@ -40,7 +42,7 @@ class SubscriptionRepository(private val context: Context) {
         ruleDir.mkdirs()
         for (name in RULE_FILES) copyAsset("rules/$name", File(ruleDir, name), overwrite = true)
 
-        return Sources.all.filter { source ->
+        return sources.filter { source ->
             val file = providerFile(source)
             if (!isValid(file)) {
                 // An asset snapshot has no network freshness timestamp, so it
@@ -54,10 +56,17 @@ class SubscriptionRepository(private val context: Context) {
 
     fun staleSources(maxAgeMs: Long = MAX_AGE_MS): List<Source> {
         val now = System.currentTimeMillis()
-        return Sources.all.filter { source ->
+        return sources.filter { source ->
             val stamp = stampFile(source)
             !stamp.exists() || now - stamp.lastModified() > maxAgeMs
         }
+    }
+
+    /** Downloads and authenticates the source list; the built-in list remains the fallback. */
+    fun refreshCatalog(proxyPort: Int? = null): Boolean {
+        val refreshed = SourceCatalog.refresh(catalogFile, proxyPort) ?: return false
+        sources = refreshed
+        return true
     }
 
     /**

@@ -26,7 +26,7 @@ interface AdProvider {
     @Composable
     fun Banner(modifier: Modifier)
 
-    /** Full-screen ad after a successful connect. Must call [onDone] in every case. */
+    /** Full-screen ad only at a natural pause, never while connecting. */
     fun showInterstitial(activity: Activity, onDone: () -> Unit) = onDone()
 }
 

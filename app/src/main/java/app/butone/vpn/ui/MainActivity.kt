@@ -26,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.butone.vpn.ads.Ads
 import app.butone.vpn.vpn.ButoneVpnService
 import app.butone.vpn.vpn.VpnState
 
@@ -104,6 +103,5 @@ class MainActivity : ComponentActivity() {
 
     private fun connect() {
         ButoneVpnService.start(this)
-        Ads.maybeShowInterstitial(this)
     }
 }

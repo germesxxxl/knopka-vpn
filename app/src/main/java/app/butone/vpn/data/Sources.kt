@@ -23,7 +23,7 @@ object Sources {
      * from a server in Russia every 2-4 hours. Mihomo's url-test then picks the
      * fastest one from the user's own network.
      */
-    val all = listOf(
+    val bundled = listOf(
         // ~150 fastest mixed nodes for regular ("black list") blocking
         Source("ru_mobile", igareck("Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_mobile_clash_rudirect.yaml")),
         // Hysteria2 / Trojan / VMess / SS fallback

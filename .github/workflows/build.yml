@@ -31,12 +31,22 @@ jobs:
           go-version: "1.26"
           cache: false
 
+      - name: Verify signed source catalog
+        run: |
+          base64 -d catalog/catalog.json.sig > "$RUNNER_TEMP/catalog.sig"
+          openssl pkeyutl -verify -rawin -pubin \
+            -inkey catalog/public-key.pem \
+            -sigfile "$RUNNER_TEMP/catalog.sig" \
+            -in catalog/catalog.json
+          python3 -m json.tool catalog/catalog.json > /dev/null
+
       - name: Build Mihomo core (gomobile AAR)
         working-directory: core
         run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           go get "github.com/metacubex/mihomo@${MIHOMO_VERSION}" golang.org/x/mobile/bind@latest
           go mod tidy
+          go test ./...
           go install golang.org/x/mobile/cmd/gomobile@latest golang.org/x/mobile/cmd/gobind@latest
           gomobile init
           mkdir -p ../app/libs

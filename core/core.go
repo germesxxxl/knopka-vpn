@@ -6,6 +6,8 @@
 package core
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -146,6 +148,24 @@ func ValidateProvider(data string) error {
 		if !nameOK || !typeOK || name == "" || typeName == "" {
 			return fmt.Errorf("proxy %d has no name or type", index+1)
 		}
+	}
+	return nil
+}
+
+// VerifyEd25519 authenticates the remotely managed source catalog. Keeping the
+// public key in the APK means a compromised mirror cannot silently point users
+// at an attacker-controlled subscription.
+func VerifyEd25519(publicKeyBase64 string, data string, signatureBase64 string) error {
+	publicKey, err := base64.StdEncoding.DecodeString(publicKeyBase64)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return errors.New("invalid catalog public key")
+	}
+	signature, err := base64.StdEncoding.DecodeString(signatureBase64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("invalid catalog signature")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), []byte(data), signature) {
+		return errors.New("catalog signature mismatch")
 	}
 	return nil
 }
