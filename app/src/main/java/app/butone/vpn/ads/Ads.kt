@@ -2,18 +2,8 @@ package app.butone.vpn.ads
 
 import android.app.Activity
 import android.content.Context
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 /**
  * Seam for an ad network (Yandex Mobile Ads, AdMob, AppLovin, ...).
@@ -45,18 +35,8 @@ object Ads {
     }
 }
 
-/** Shows where the banner will be; replace with a real network before release. */
+/** No ad is shown until a moderated network and a real placement ID are configured. */
 object PlaceholderAds : AdProvider {
     @Composable
-    override fun Banner(modifier: Modifier) {
-        Box(
-            modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("Место для рекламы", color = Color(0x66FFFFFF), fontSize = 13.sp)
-        }
-    }
+    override fun Banner(modifier: Modifier) = Unit
 }
