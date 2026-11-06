@@ -51,9 +51,28 @@ class CoreApi(private val secret: String) {
 
     /** Performs a fresh request through the currently selected outbound. */
     fun probeSelected(): Int {
-        val path = "/proxies/${enc(ConfigBuilder.AUTO_GROUP)}/delay" +
-            "?url=${enc(PROBE_URL)}&timeout=8000&expected=204"
-        return JSONObject(get(path)).getInt("delay")
+        var lastError: Exception? = null
+        for (url in PROBE_URLS) {
+            try {
+                val path = "/proxies/${enc(ConfigBuilder.AUTO_GROUP)}/delay" +
+                    "?url=${enc(url)}&timeout=8000&expected=204"
+                return JSONObject(get(path)).getInt("delay")
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        throw lastError ?: IOException("all connectivity probes failed")
+    }
+
+    /** Triggers a fresh check of every node in a provider so AUTO can switch away. */
+    fun healthCheckProvider(name: String) {
+        get("/providers/proxies/${enc(name)}/healthcheck")
+    }
+
+    /** Cumulative bytes seen by the tunnel; growth proves that real traffic is flowing. */
+    fun trafficTotal(): Long {
+        val data = connections()
+        return data.optLong("downloadTotal") + data.optLong("uploadTotal")
     }
 
     /** Raw /connections: totals plus every live connection with its inbound type and chain. */
@@ -94,7 +113,11 @@ class CoreApi(private val secret: String) {
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
     companion object {
-        private const val PROBE_URL = "https://www.gstatic.com/generate_204"
+        private val PROBE_URLS = listOf(
+            "https://www.gstatic.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+            "https://connectivitycheck.gstatic.com/generate_204",
+        )
 
         /** "Igareck Node 001 | 🇫🇮 Finland， Helsinki | [BL]" -> "🇫🇮 Finland, Helsinki" */
         fun prettyName(raw: String): String {

@@ -92,11 +92,11 @@ object ConfigBuilder {
             |    type: url-test
             |    use: [$use]
             |    url: $TEST_URL
-            |    interval: 300
-            |    tolerance: 150
+            |    interval: 180
+            |    tolerance: 80
             |    lazy: false
             |    timeout: 5000
-            |    max-failed-times: 2
+            |    max-failed-times: 1
             |    expected-status: 204
             |
             |rule-providers:
