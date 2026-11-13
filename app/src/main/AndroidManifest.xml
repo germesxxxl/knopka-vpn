@@ -29,23 +29,35 @@
 
         <activity
             android:name=".ui.MainActivity"
+            android:exported="false"
+            android:launchMode="singleTask" />
+
+        <activity
+            android:name=".ui.TvActivity"
+            android:exported="false"
+            android:launchMode="singleTask" />
+
+        <activity-alias
+            android:name=".PhoneLauncher"
+            android:enabled="${phoneLauncherEnabled}"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:targetActivity=".ui.MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
 
-        <activity
-            android:name=".ui.TvActivity"
+        <activity-alias
+            android:name=".TvLauncher"
+            android:enabled="${tvLauncherEnabled}"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:targetActivity=".ui.TvActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
 
         <service
             android:name=".vpn.ButoneVpnService"

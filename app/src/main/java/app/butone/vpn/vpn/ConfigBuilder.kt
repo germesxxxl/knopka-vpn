@@ -4,8 +4,8 @@ import app.butone.vpn.data.Source
 
 /**
  * Builds the complete Mihomo config. Design choices:
- * - one url-test group [AUTO_GROUP] over all providers: Mihomo itself pings
- *   every node from the user's network and switches if the current one dies;
+ * - a selector group [AUTO_GROUP] over all providers: Android shortlists by
+ *   Mihomo latency and selects a node only after real service checks;
  * - Russian sites and IPs go DIRECT (banks, gov services, marketplaces never
  *   touch public nodes), same as igareck's "rudirect" profiles;
  * - TUN uses the fd from VpnService; our own app is excluded from the VPN,
@@ -15,21 +15,23 @@ object ConfigBuilder {
     const val AUTO_GROUP = "AUTO"
     const val CONTROLLER_PORT = 9090
     const val MIXED_PORT = 7890
-    private const val TEST_URL = "https://www.gstatic.com/generate_204"
+    private const val TEST_URL = "https://www.youtube.com/generate_204"
 
     fun build(sources: List<Source>, secret: String): String {
         val providers = sources.joinToString("\n") { s ->
+            val lazy = s.id == "ru_vless_full"
             """
             |  ${s.id}:
             |    type: file
             |    path: ./providers/${s.id}.yaml
             |    override:
             |      skip-cert-verify: false
+            |      additional-prefix: "[${s.id}] "
             |    health-check:
             |      enable: true
             |      url: $TEST_URL
             |      interval: 600
-            |      lazy: false
+            |      lazy: $lazy
             |      timeout: 5000
             |      expected-status: 204
             """.trimMargin()
@@ -57,8 +59,7 @@ object ConfigBuilder {
             |  device: butone
             |  stack: gvisor
             |  inet4-address: [172.19.0.1/30]
-            |  inet6-address: ["fdfe:dcba:9876::1/126"]
-            |  mtu: 1500
+            |  mtu: 1400
             |  auto-route: false
             |  auto-detect-interface: false
             |  dns-hijack: ["any:53"]
@@ -89,15 +90,8 @@ object ConfigBuilder {
             |
             |proxy-groups:
             |  - name: $AUTO_GROUP
-            |    type: url-test
+            |    type: select
             |    use: [$use]
-            |    url: $TEST_URL
-            |    interval: 180
-            |    tolerance: 80
-            |    lazy: false
-            |    timeout: 5000
-            |    max-failed-times: 1
-            |    expected-status: 204
             |
             |rule-providers:
             |  ru-sites: { type: file, behavior: domain, format: mrs, path: ./rules/category-ru.mrs }

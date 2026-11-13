@@ -18,5 +18,6 @@ fetch() {  # id path
   echo "$1: $(grep -c '^  - name:\|^- name:' "$A/subs/$1.yaml" || true) entries"
 }
 fetch ru_mobile "Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_mobile_clash_rudirect.yaml"
+fetch ru_vless_full "Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_clash_rudirect.yaml"
 fetch ru_other  "Export/Clash/RU_DIRECT/BLACK_SS%2BAll_RUS_clash_rudirect.yaml"
 fetch ru_white  "Export/Clash/GLOBAL/WHITE-CIDR-RU-checked-clash-global.yaml"

@@ -24,7 +24,7 @@ internal object SourceCatalog {
     )
 
     fun load(cache: File): List<Source> = runCatching {
-        parse(cache.readText(Charsets.UTF_8))
+        mergeBundled(parse(cache.readText(Charsets.UTF_8)))
     }.onFailure { Log.w(TAG, "cached catalog rejected: $it") }
         .getOrDefault(Sources.bundled)
 
@@ -37,7 +37,7 @@ internal object SourceCatalog {
                 val signature = get("$url.sig", proxy, 256).toString(Charsets.UTF_8).trim()
                 val text = body.toString(Charsets.UTF_8)
                 Core.verifyEd25519(PUBLIC_KEY, text, signature)
-                val sources = parse(text)
+                val sources = mergeBundled(parse(text))
                 cache.parentFile?.mkdirs()
                 val candidate = File(cache.path + ".download")
                 candidate.writeBytes(body)
@@ -66,6 +66,13 @@ internal object SourceCatalog {
             require(urls.all { URL(it).protocol == "https" }) { "only HTTPS source URLs are allowed" }
             Source(id, urls)
         }
+    }
+
+    /** Signed catalog may change mirrors, but APK-pinned reserve sources cannot be removed remotely. */
+    private fun mergeBundled(remote: List<Source>): List<Source> {
+        val byId = remote.associateBy { it.id }.toMutableMap()
+        Sources.bundled.forEach { source -> byId.putIfAbsent(source.id, source) }
+        return byId.values.toList()
     }
 
     private fun get(url: String, proxy: Proxy, limit: Int): ByteArray {

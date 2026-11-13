@@ -12,8 +12,26 @@ android {
         applicationId = "app.butone.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "0.1.0"
+        versionCode = (System.getenv("VERSION_CODE") ?: "14").toInt()
+        versionName = System.getenv("VERSION_NAME") ?: "0.1.14"
+    }
+
+    flavorDimensions += "device"
+    productFlavors {
+        create("phone") {
+            dimension = "device"
+            buildConfigField("boolean", "IS_TV", "false")
+            manifestPlaceholders["phoneLauncherEnabled"] = "true"
+            manifestPlaceholders["tvLauncherEnabled"] = "false"
+        }
+        create("tv") {
+            dimension = "device"
+            applicationIdSuffix = ".tv"
+            versionNameSuffix = "-tv"
+            buildConfigField("boolean", "IS_TV", "true")
+            manifestPlaceholders["phoneLauncherEnabled"] = "false"
+            manifestPlaceholders["tvLauncherEnabled"] = "true"
+        }
     }
 
     // The Mihomo core (libgojni.so, ~64 MB) is otherwise stored uncompressed;

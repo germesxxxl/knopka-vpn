@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
                 var showDisclaimer by remember { mutableStateOf(!prefs.getBoolean("disclaimer_ok", false)) }
                 var showReport by remember { mutableStateOf(false) }
                 var report by remember { mutableStateOf<String?>(null) }
+                var reportDays by remember { mutableStateOf<Int?>(7) }
                 val scope = rememberCoroutineScope()
                 val status by VpnState.status.collectAsStateWithLifecycle()
 
@@ -59,7 +60,7 @@ class MainActivity : ComponentActivity() {
                         showReport = true
                         report = null
                         scope.launch {
-                            report = withContext(Dispatchers.IO) { Diagnostics.report(this@MainActivity) }
+                            report = withContext(Dispatchers.IO) { Diagnostics.report(this@MainActivity, reportDays) }
                         }
                     },
                 )
@@ -67,6 +68,14 @@ class MainActivity : ComponentActivity() {
                 if (showReport) {
                     ReportDialog(
                         text = report,
+                        periodDays = reportDays,
+                        onPeriod = { days ->
+                            reportDays = days
+                            report = null
+                            scope.launch {
+                                report = withContext(Dispatchers.IO) { Diagnostics.report(this@MainActivity, days) }
+                            }
+                        },
                         onCopy = {
                             val cm = getSystemService(ClipboardManager::class.java)
                             cm.setPrimaryClip(ClipData.newPlainText("butone report", report))

@@ -13,6 +13,10 @@ sealed interface VpnStatus {
         val delayMs: Int? = null,
         val alive: Int = 0,
         val total: Int = 0,
+        val serviceOk: Int = 0,
+        val serviceTotal: Int = 4,
+        /** regular, restricted or reserve; shown in diagnostics, not as a protocol detail. */
+        val pool: String? = null,
         /** When a working node was first found (System.currentTimeMillis), for the session timer. */
         val since: Long? = null,
     ) : VpnStatus

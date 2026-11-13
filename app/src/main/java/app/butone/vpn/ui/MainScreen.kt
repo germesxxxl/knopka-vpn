@@ -271,6 +271,14 @@ private fun Info(phase: Phase, status: VpnStatus) {
                         Text("$ms мс · $word", color = Color.White, fontSize = 16.sp)
                     }
                 }
+                if (s.serviceTotal > 0) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Проверка сервисов: ${s.serviceOk}/${s.serviceTotal}",
+                        color = Palette.TextDim,
+                        fontSize = 14.sp,
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 s.since?.let { SessionTimer(it) }
             }
@@ -354,19 +362,37 @@ fun parseNode(pretty: String): NodeLabel {
 }
 
 @Composable
-fun ReportDialog(text: String?, onCopy: () -> Unit, onDismiss: () -> Unit) {
+fun ReportDialog(
+    text: String?,
+    periodDays: Int?,
+    onPeriod: (Int?) -> Unit,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onCopy, enabled = text != null) { Text("Скопировать") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
         title = { Text("Отчёт для разработчика") },
         text = {
-            Text(
-                text ?: "Собираем…",
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
-            )
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    listOf(1 to "Сутки", 7 to "7 дней", 30 to "30 дней").forEach { (days, label) ->
+                        TextButton(onClick = { onPeriod(days) }) {
+                            Text(label, color = if (periodDays == days) Palette.GreenGlow else Palette.TextDim)
+                        }
+                    }
+                    TextButton(onClick = { onPeriod(null) }) {
+                        Text("Всё", color = if (periodDays == null) Palette.GreenGlow else Palette.TextDim)
+                    }
+                }
+                Text(
+                    text ?: "Собираем…",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                )
+            }
         },
     )
 }

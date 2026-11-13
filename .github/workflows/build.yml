@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 env:
-  MIHOMO_VERSION: v1.19.33
+  MIHOMO_VERSION: v1.19.34
 
 jobs:
   build:

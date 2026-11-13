@@ -26,6 +26,10 @@ object Sources {
     val bundled = listOf(
         // ~150 fastest mixed nodes for regular ("black list") blocking
         Source("ru_mobile", igareck("Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_mobile_clash_rudirect.yaml")),
+        // Full VLESS pool. It is intentionally a last-resort source: the
+        // smaller mobile list is faster to scan, while this adds nodes that
+        // fell outside its current top 150.
+        Source("ru_vless_full", igareck("Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_clash_rudirect.yaml")),
         // Hysteria2 / Trojan / VMess / SS fallback
         Source("ru_other", igareck("Export/Clash/RU_DIRECT/BLACK_SS%2BAll_RUS_clash_rudirect.yaml")),
         // Nodes that pass mobile-operator "white list" mode

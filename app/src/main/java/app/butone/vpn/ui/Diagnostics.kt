@@ -3,6 +3,7 @@ package app.butone.vpn.ui
 import android.content.Context
 import android.os.Build
 import app.butone.vpn.BuildConfig
+import app.butone.vpn.diagnostics.EventJournal
 import app.butone.vpn.vpn.CoreApi
 import app.butone.vpn.vpn.VpnState
 import core.Core
@@ -14,11 +15,16 @@ import core.Core
  */
 object Diagnostics {
 
-    fun report(context: Context): String = buildString {
+    fun report(context: Context, days: Int? = 7): String = buildString {
+        val journal = EventJournal(context)
         appendLine("butone ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         appendLine("Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
         appendLine("Core: ${runCatching { Core.version() }.getOrDefault("?")}, running=${runCatching { Core.isRunning() }.getOrDefault(false)}")
         appendLine("Status: ${VpnState.status.value}")
+        appendLine("Network: ${EventJournal.networkKind(context)}")
+        appendLine("Installed/journal since: ${java.util.Date(journal.installedAt)}")
+        appendLine("Journal size: ${journal.retainedBytes() / 1024} KB")
+        appendLine("Report period: ${days?.let { "$it days" } ?: "all retained history"}")
         appendLine()
 
         val secret = VpnState.apiSecret
@@ -57,6 +63,9 @@ object Diagnostics {
         appendLine("---- core log (last 120) ----")
         val log = runCatching { Core.logs() }.getOrDefault("")
         appendLine(log.lines().takeLast(120).joinToString("\n"))
+        appendLine()
+        appendLine("---- persistent event journal ----")
+        appendLine(journal.read(days))
     }
 
     private fun kb(bytes: Long) = "${bytes / 1024} KB"

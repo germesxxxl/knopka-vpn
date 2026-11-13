@@ -17,36 +17,55 @@ class CoreApi(private val secret: String) {
         val total: Int,
     )
 
+    data class Candidate(
+        val name: String,
+        val provider: String,
+        val delayMs: Int,
+        /** 0 regular, 1 restricted/white-list, 2 unnamed or reserve. */
+        val pool: Int,
+    )
+
     /** [providerNames]: our subscription providers (Mihomo also lists a built-in "default"). */
     fun status(providerNames: Set<String>): Status {
         val group = JSONObject(get("/proxies/${enc(ConfigBuilder.AUTO_GROUP)}"))
         val now = group.optString("now").ifEmpty { null }
+        val candidates = candidates(providerNames)
+        val current = candidates.firstOrNull { it.name == now }
+        return Status(
+            node = now,
+            delayMs = current?.delayMs,
+            currentAlive = current != null,
+            alive = candidates.size,
+            total = candidates.size,
+        )
+    }
 
-        // Provider nodes are not served by /proxies/{name} (404), so read their
-        // ping history from the provider listing instead.
-        var alive = 0
-        var total = 0
-        var delay: Int? = null
-        var currentAlive = false
+    /** Fresh Mihomo measurements, sorted by pool first and latency second. */
+    fun candidates(providerNames: Set<String>): List<Candidate> {
+        val result = mutableListOf<Candidate>()
         val providers = JSONObject(get("/providers/proxies")).getJSONObject("providers")
         for (key in providers.keys()) {
             if (key !in providerNames) continue
             val proxies = providers.getJSONObject(key).optJSONArray("proxies") ?: continue
             for (i in 0 until proxies.length()) {
-                val p = proxies.getJSONObject(i)
-                val d = lastDelay(p) ?: 0
-                val testedAlive = d > 0 && (!p.has("alive") || p.optBoolean("alive"))
-                total++
-                // Untested nodes can initially be marked alive, so require a
-                // positive measurement as well as Mihomo's live flag.
-                if (testedAlive) alive++
-                if (delay == null && p.optString("name") == now) {
-                    delay = d
-                    currentAlive = testedAlive
-                }
+                val proxy = proxies.getJSONObject(i)
+                val delay = lastDelay(proxy) ?: 0
+                val alive = delay > 0 && (!proxy.has("alive") || proxy.optBoolean("alive"))
+                if (!alive) continue
+                val name = proxy.optString("name")
+                result += Candidate(name, key, delay, pool(key, name))
             }
         }
-        return Status(now, delay?.takeIf { it > 0 }, currentAlive, alive, total)
+        return result.sortedWith(compareBy<Candidate> { it.pool }.thenBy { it.delayMs })
+    }
+
+    /** Selects the exact provider node in our selector group. */
+    fun selectNode(name: String) {
+        request(
+            "PUT",
+            "/proxies/${enc(ConfigBuilder.AUTO_GROUP)}",
+            JSONObject().put("name", name).toString(),
+        )
     }
 
     /** Performs a fresh request through the currently selected outbound. */
@@ -91,13 +110,18 @@ class CoreApi(private val secret: String) {
 
     private fun get(path: String) = request("GET", path)
 
-    private fun request(method: String, path: String): String {
+    private fun request(method: String, path: String, body: String? = null): String {
         val conn = URL("http://127.0.0.1:${ConfigBuilder.CONTROLLER_PORT}$path")
             .openConnection() as HttpURLConnection
         conn.requestMethod = method
         conn.connectTimeout = 2_000
         conn.readTimeout = 15_000
         conn.setRequestProperty("Authorization", "Bearer $secret")
+        if (body != null) {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
         return try {
             val status = conn.responseCode
             val body = (if (status in 200..299) conn.inputStream else conn.errorStream)
@@ -112,6 +136,16 @@ class CoreApi(private val secret: String) {
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
+    private fun pool(provider: String, name: String): Int = when {
+        provider == "ru_white" || provider.contains("white") -> 1
+        provider == "ru_other" && !hasCountryFlag(name) -> 2
+        provider == "ru_mobile" || provider == "ru_other" -> 0
+        else -> 2
+    }
+
+    private fun hasCountryFlag(value: String): Boolean =
+        value.codePoints().anyMatch { it in 0x1F1E6..0x1F1FF }
+
     companion object {
         private val PROBE_URLS = listOf(
             "https://www.gstatic.com/generate_204",
@@ -121,8 +155,9 @@ class CoreApi(private val secret: String) {
 
         /** "Igareck Node 001 | 🇫🇮 Finland， Helsinki | [BL]" -> "🇫🇮 Finland, Helsinki" */
         fun prettyName(raw: String): String {
-            val parts = raw.split("|").map { it.trim() }.filter { it.isNotEmpty() }
-            val name = if (parts.size >= 2) parts[1] else raw
+            val withoutProvider = raw.replace(Regex("^\\[[^]]+]\\s*"), "")
+            val parts = withoutProvider.split("|").map { it.trim() }.filter { it.isNotEmpty() }
+            val name = if (parts.size >= 2) parts[1] else withoutProvider
             return name.replace("，", ", ").replace(Regex("\\s+"), " ").take(40)
         }
     }
