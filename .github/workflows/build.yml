@@ -92,15 +92,15 @@ jobs:
           # Without the secret this env var is "", which Gradle would treat as a keystore path.
           [ -z "$KEYSTORE_PATH" ] && unset KEYSTORE_PATH
           gradle --no-daemon ${{ steps.sign.outputs.task }}
-          ls -la app/build/outputs/apk/${{ steps.sign.outputs.dir }}/
+          find app/build/outputs/apk -type f -name '*.apk' -print
 
       - uses: actions/upload-artifact@v4
         with:
           name: butone-apk
-          path: app/build/outputs/apk/${{ steps.sign.outputs.dir }}/*.apk
+          path: app/build/outputs/apk/**/*.apk
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/${{ steps.sign.outputs.dir }}/*.apk
+          files: app/build/outputs/apk/**/*.apk
