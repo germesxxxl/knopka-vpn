@@ -106,6 +106,19 @@ object ConfigBuilder {
             |  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
             |  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
             |  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+            |  # Major Russian apps also use foreign-TLD API/CDN domains.
+            |  - DOMAIN-SUFFIX,yandex.com,DIRECT
+            |  - DOMAIN-SUFFIX,yandex.net,DIRECT
+            |  - DOMAIN-SUFFIX,yastatic.net,DIRECT
+            |  - DOMAIN-SUFFIX,ya.ru,DIRECT
+            |  - DOMAIN-SUFFIX,vk.com,DIRECT
+            |  - DOMAIN-SUFFIX,userapi.com,DIRECT
+            |  - DOMAIN-SUFFIX,vkuser.net,DIRECT
+            |  - DOMAIN-SUFFIX,mycdn.me,DIRECT
+            |  - DOMAIN-SUFFIX,ozonusercontent.com,DIRECT
+            |  - DOMAIN-SUFFIX,avito.st,DIRECT
+            |  - DOMAIN-SUFFIX,sberbank.com,DIRECT
+            |  - DOMAIN-SUFFIX,alfabank.com,DIRECT
             |  - DOMAIN-SUFFIX,ru,DIRECT
             |  - DOMAIN-SUFFIX,su,DIRECT
             |  - DOMAIN-SUFFIX,xn--p1ai,DIRECT

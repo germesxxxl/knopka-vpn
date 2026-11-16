@@ -3,6 +3,12 @@ package app.butone.vpn.vpn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+data class ServiceAvailability(
+    val name: String,
+    val available: Boolean,
+    val latencyMs: Long,
+)
+
 sealed interface VpnStatus {
     data object Disconnected : VpnStatus
     data object Connecting : VpnStatus
@@ -15,6 +21,7 @@ sealed interface VpnStatus {
         val total: Int = 0,
         val serviceOk: Int = 0,
         val serviceTotal: Int = 4,
+        val services: List<ServiceAvailability> = emptyList(),
         /** regular, restricted or reserve; shown in diagnostics, not as a protocol detail. */
         val pool: String? = null,
         /** When a working node was first found (System.currentTimeMillis), for the session timer. */

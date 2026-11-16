@@ -91,7 +91,7 @@ class ServiceHealthChecker(private val proxyPort: Int = ConfigBuilder.MIXED_PORT
     }
 
     companion object {
-        private const val TIMEOUT_MS = 8_000
+        private const val TIMEOUT_MS = 5_000
         private const val MAX_READ = 64 * 1024
         private const val USER_AGENT = "Mozilla/5.0 (Android) butone-connectivity/1"
     }

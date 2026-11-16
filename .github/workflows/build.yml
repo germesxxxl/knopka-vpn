@@ -94,13 +94,21 @@ jobs:
           gradle --no-daemon ${{ steps.sign.outputs.task }}
           find app/build/outputs/apk -type f -name '*.apk' -print
 
+      - name: Prepare phone and TV deliverables
+        run: |
+          mkdir -p app/build/deliverables
+          cp app/build/outputs/apk/phone/${{ steps.sign.outputs.dir }}/*arm64-v8a*.apk \
+            app/build/deliverables/butone-phone-arm64.apk
+          cp app/build/outputs/apk/tv/${{ steps.sign.outputs.dir }}/*universal*.apk \
+            app/build/deliverables/butone-google-tv-universal.apk
+
       - uses: actions/upload-artifact@v4
         with:
           name: butone-apk
-          path: app/build/outputs/apk/**/*.apk
+          path: app/build/deliverables/*.apk
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/**/*.apk
+          files: app/build/deliverables/*.apk

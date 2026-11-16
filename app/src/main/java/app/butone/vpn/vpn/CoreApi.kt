@@ -25,29 +25,38 @@ class CoreApi(private val secret: String) {
         val pool: Int,
     )
 
+    private data class ProviderSnapshot(
+        val candidates: List<Candidate>,
+        val total: Int,
+    )
+
     /** [providerNames]: our subscription providers (Mihomo also lists a built-in "default"). */
     fun status(providerNames: Set<String>): Status {
         val group = JSONObject(get("/proxies/${enc(ConfigBuilder.AUTO_GROUP)}"))
         val now = group.optString("now").ifEmpty { null }
-        val candidates = candidates(providerNames)
-        val current = candidates.firstOrNull { it.name == now }
+        val snapshot = providerSnapshot(providerNames)
+        val current = snapshot.candidates.firstOrNull { it.name == now }
         return Status(
             node = now,
             delayMs = current?.delayMs,
             currentAlive = current != null,
-            alive = candidates.size,
-            total = candidates.size,
+            alive = snapshot.candidates.size,
+            total = snapshot.total,
         )
     }
 
     /** Fresh Mihomo measurements, sorted by pool first and latency second. */
-    fun candidates(providerNames: Set<String>): List<Candidate> {
+    fun candidates(providerNames: Set<String>): List<Candidate> = providerSnapshot(providerNames).candidates
+
+    private fun providerSnapshot(providerNames: Set<String>): ProviderSnapshot {
         val result = mutableListOf<Candidate>()
+        var total = 0
         val providers = JSONObject(get("/providers/proxies")).getJSONObject("providers")
         for (key in providers.keys()) {
             if (key !in providerNames) continue
             val proxies = providers.getJSONObject(key).optJSONArray("proxies") ?: continue
             for (i in 0 until proxies.length()) {
+                total++
                 val proxy = proxies.getJSONObject(i)
                 val delay = lastDelay(proxy) ?: 0
                 val alive = delay > 0 && (!proxy.has("alive") || proxy.optBoolean("alive"))
@@ -56,7 +65,10 @@ class CoreApi(private val secret: String) {
                 result += Candidate(name, key, delay, pool(key, name))
             }
         }
-        return result.sortedWith(compareBy<Candidate> { it.pool }.thenBy { it.delayMs })
+        return ProviderSnapshot(
+            candidates = result.sortedWith(compareBy<Candidate> { it.pool }.thenBy { it.delayMs }),
+            total = total,
+        )
     }
 
     /** Selects the exact provider node in our selector group. */
@@ -74,7 +86,7 @@ class CoreApi(private val secret: String) {
         for (url in PROBE_URLS) {
             try {
                 val path = "/proxies/${enc(ConfigBuilder.AUTO_GROUP)}/delay" +
-                    "?url=${enc(url)}&timeout=8000&expected=204"
+                    "?url=${enc(url)}&timeout=5000&expected=204"
                 return JSONObject(get(path)).getInt("delay")
             } catch (e: Exception) {
                 lastError = e

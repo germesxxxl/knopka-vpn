@@ -163,6 +163,7 @@ class ButoneVpnService : VpnService() {
         var since: Long? = null
         var selected: Selection? = null
         var lastVerifiedAt = 0L
+        var lastQuickProbeAt = 0L
         var unavailableSince = SystemClock.elapsedRealtime()
         var pollFailures = 0
         var healthCheckRequested = false
@@ -176,13 +177,28 @@ class ButoneVpnService : VpnService() {
                     network = currentNetwork
                     selected = null
                     lastVerifiedAt = 0L
+                    lastQuickProbeAt = 0L
                 }
                 val s = api.status(providers)
                 currentCoroutineContext().ensureActive()
                 pollFailures = 0
                 val now = SystemClock.elapsedRealtime()
                 val stillSelected = selected?.candidate?.name == s.node && s.currentAlive
-                val needsCheck = !stillSelected || now - lastVerifiedAt >= SERVICE_RECHECK_MS
+                if (stillSelected && now - lastQuickProbeAt >= QUICK_PROBE_INTERVAL_MS) {
+                    lastQuickProbeAt = now
+                    val quickOk = runCatching { api.probeSelected() > 0 }
+                        .onFailure { Log.w(TAG, "quick outbound probe: $it") }
+                        .getOrDefault(false)
+                    if (!quickOk) {
+                        journal.record(
+                            "quick_probe_failed",
+                            "Сервер перестал отвечать на быструю проверку",
+                            mapOf("node" to selected?.candidate?.name?.let { CoreApi.prettyName(it) }),
+                        )
+                        selected = null
+                    }
+                }
+                val needsCheck = selected == null || !stillSelected || now - lastVerifiedAt >= SERVICE_RECHECK_MS
                 if (needsCheck) {
                     VpnState.set(VpnStatus.Connected(alive = s.alive, total = s.total, since = since))
                     selected = findWorkingNode(
@@ -193,6 +209,7 @@ class ButoneVpnService : VpnService() {
                         preferred = selected?.candidate?.name,
                     )
                     lastVerifiedAt = SystemClock.elapsedRealtime()
+                    lastQuickProbeAt = lastVerifiedAt
                 }
 
                 val ready = selected != null
@@ -222,6 +239,9 @@ class ButoneVpnService : VpnService() {
                         total = s.total,
                         serviceOk = chosen?.report?.okCount ?: 0,
                         serviceTotal = chosen?.report?.total ?: 4,
+                        services = chosen?.report?.results?.map {
+                            ServiceAvailability(it.service, it.ok, it.latencyMs)
+                        }.orEmpty(),
                         pool = chosen?.candidate?.pool?.let(::poolName),
                         since = since,
                     )
@@ -466,7 +486,8 @@ class ButoneVpnService : VpnService() {
         private const val TAG = "ButoneVpn"
         private const val NOTIFICATION_ID = 1
         private const val RECOVERY_TIMEOUT_MS = 3 * 60_000L
-        private const val SERVICE_RECHECK_MS = 2 * 60_000L
+        private const val SERVICE_RECHECK_MS = 10 * 60_000L
+        private const val QUICK_PROBE_INTERVAL_MS = 60_000L
         private const val MAX_SERVICE_CANDIDATES = 8
         private const val REFRESH_RETRY_MS = 30 * 60 * 1000L
         const val ACTION_START = "app.butone.vpn.START"

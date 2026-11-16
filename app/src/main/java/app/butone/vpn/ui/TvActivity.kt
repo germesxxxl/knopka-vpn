@@ -181,7 +181,13 @@ private fun TvScreen(status: VpnStatus, onToggle: () -> Unit) {
                             append(parsed.flag).append(' ').append(parsed.country)
                             if (parsed.city.isNotBlank()) append(" · ").append(parsed.city)
                             status.delayMs?.let { append("\n").append(it).append(" мс") }
-                            append(" · сервисы ").append(status.serviceOk).append('/').append(status.serviceTotal)
+                            if (status.services.isNotEmpty()) {
+                                append("\n")
+                                append(status.services.joinToString(" · ") {
+                                    "${if (it.available) "✓" else "✕"} ${it.name}"
+                                })
+                            }
+                            append("\nСерверы: ").append(status.alive).append(" из ").append(status.total)
                         }
                     } ?: "Проверяем ${status.total} серверов"
                     is VpnStatus.Error -> status.message

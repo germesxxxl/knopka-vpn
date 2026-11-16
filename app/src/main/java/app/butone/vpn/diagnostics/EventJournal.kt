@@ -47,32 +47,46 @@ class EventJournal(context: Context) {
     /** Human-readable event history for a report. null means the whole retained history. */
     fun read(days: Int?): String = synchronized(FILE_LOCK) {
         val since = days?.let { System.currentTimeMillis() - it * DAY_MS } ?: Long.MIN_VALUE
-        val output = StringBuilder()
-        var included = 0
+        val rendered = mutableListOf<String>()
+        val counts = linkedMapOf<String, Int>()
+        var passedProbes = 0
+        var failedProbes = 0
         files().forEach { file ->
             file.useLines(Charsets.UTF_8) { lines ->
                 lines.forEach { line ->
                     runCatching { JSONObject(line) }.getOrNull()?.let { item ->
                         val at = item.optLong("at")
                         if (at >= since) {
-                            included++
-                            output.append(TIME_FORMAT.format(Date(at)))
-                                .append("  ").append(item.optString("type"))
-                                .append("  ").append(item.optString("message"))
+                            val type = item.optString("type")
+                            val message = item.optString("message")
+                            counts[type] = (counts[type] ?: 0) + 1
+                            if (type == "service_probe") {
+                                if (message.startsWith("Сервер прошёл")) passedProbes++ else failedProbes++
+                            }
                             val keys = item.keys().asSequence()
                                 .filterNot { it in setOf("at", "type", "message") }
                                 .toList()
-                            if (keys.isNotEmpty()) {
-                                output.append("  ")
-                                output.append(keys.joinToString(", ") { "$it=${item.optString(it)}" })
+                            rendered += buildString {
+                                append(TIME_FORMAT.format(Date(at)))
+                                    .append("  ").append(type)
+                                    .append("  ").append(message)
+                                if (keys.isNotEmpty()) {
+                                    append("  ")
+                                    append(keys.joinToString(", ") { "$it=${item.optString(it)}" })
+                                }
                             }
-                            output.appendLine()
                         }
                     }
                 }
             }
         }
-        "Events: $included\n" + output.toString().takeLast(MAX_REPORT_CHARS)
+        buildString {
+            appendLine("Events: ${rendered.size}")
+            appendLine("Event counts: ${counts.entries.sortedByDescending { it.value }.joinToString { "${it.key}=${it.value}" }}")
+            appendLine("Service probes: passed=$passedProbes failed=$failedProbes")
+            appendLine("Order: newest first")
+            rendered.asReversed().forEach { appendLine(it) }
+        }.take(MAX_REPORT_CHARS)
     }
 
     fun retainedBytes(): Long = synchronized(FILE_LOCK) { files().sumOf { it.length() } }

@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.butone.vpn.R
 import app.butone.vpn.ads.Ads
+import app.butone.vpn.vpn.ServiceAvailability
 import app.butone.vpn.vpn.VpnStatus
 import kotlinx.coroutines.delay
 import java.util.Locale
@@ -128,7 +129,7 @@ fun MainScreen(status: VpnStatus, onToggle: () -> Unit, onReport: () -> Unit) {
             PowerButton(phase, onToggle)
             Spacer(Modifier.height(28.dp))
 
-            Box(Modifier.height(190.dp), contentAlignment = Alignment.TopCenter) {
+            Box(Modifier.height(250.dp), contentAlignment = Alignment.TopCenter) {
                 Crossfade(targetState = phase, animationSpec = tween(400), label = "info") { p ->
                     Info(p, status)
                 }
@@ -248,8 +249,11 @@ private fun Info(phase: Phase, status: VpnStatus) {
             }
             Phase.Searching -> {
                 Title("Подбираем лучший сервер…")
-                val total = (status as? VpnStatus.Connected)?.total ?: 0
-                Sub(if (total > 0) "Проверяем $total серверов" else "Подключаемся")
+                val connected = status as? VpnStatus.Connected
+                val total = connected?.total ?: 0
+                val alive = connected?.alive ?: 0
+                Sub(if (total > 0) "Отвечают $alive из $total серверов" else "Подключаемся")
+                Sub("Проверяем YouTube, Telegram, Instagram и WhatsApp")
             }
             Phase.Error -> {
                 Title("Не удалось подключиться")
@@ -259,8 +263,8 @@ private fun Info(phase: Phase, status: VpnStatus) {
             Phase.On -> {
                 val s = status as? VpnStatus.Connected ?: return@Column
                 val node = parseNode(s.node ?: "")
-                Text(node.flag, fontSize = 44.sp)
-                Text(node.country, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text(node.flag, fontSize = 38.sp)
+                Text(node.country, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 if (node.city.isNotEmpty()) Sub(node.city)
                 Spacer(Modifier.height(12.dp))
                 s.delayMs?.let { ms ->
@@ -271,19 +275,53 @@ private fun Info(phase: Phase, status: VpnStatus) {
                         Text("$ms мс · $word", color = Color.White, fontSize = 16.sp)
                     }
                 }
-                if (s.serviceTotal > 0) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Проверка сервисов: ${s.serviceOk}/${s.serviceTotal}",
-                        color = Palette.TextDim,
-                        fontSize = 14.sp,
-                    )
-                }
+                ServiceStatusGrid(s.services)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Доступно серверов: ${s.alive} из ${s.total}" +
+                        (s.pool?.let { " · $it" } ?: ""),
+                    color = Palette.TextDim,
+                    fontSize = 12.sp,
+                )
                 Spacer(Modifier.height(8.dp))
                 s.since?.let { SessionTimer(it) }
             }
         }
     }
+}
+
+@Composable
+private fun ServiceStatusGrid(services: List<ServiceAvailability>) {
+    if (services.isEmpty()) return
+    val byName = services.associateBy { it.name }
+    Spacer(Modifier.height(8.dp))
+    listOf("YouTube", "Telegram", "Instagram", "WhatsApp")
+        .mapNotNull { byName[it] }
+        .chunked(2)
+        .forEach { row ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(vertical = 2.dp),
+            ) {
+                row.forEach { service -> ServiceBadge(service) }
+            }
+        }
+}
+
+@Composable
+private fun ServiceBadge(service: ServiceAvailability) {
+    val color = if (service.available) Palette.GreenGlow else Palette.Red
+    Text(
+        text = "${if (service.available) "✓" else "✕"} ${service.name}",
+        color = color,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .width(132.dp)
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+    )
 }
 
 @Composable
