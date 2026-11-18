@@ -41,6 +41,8 @@ class ButoneVpnService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
+    /** Provider reloads and node selection must never race each other. */
+    private val providerMutationLock = Mutex()
     private var tun: ParcelFileDescriptor? = null
     private var monitorJob: Job? = null
     private var refreshJob: Job? = null
@@ -81,8 +83,26 @@ class ButoneVpnService : VpnService() {
 
     private fun startVpnLocked() {
         if (tun != null) return
-        VpnState.set(VpnStatus.Connecting)
+        val startedAt = System.currentTimeMillis()
+        VpnState.set(
+            VpnStatus.Connecting(
+                ConnectionProgress(
+                    stage = ConnectionStage.PREPARING,
+                    detail = "Подготавливаем защищённое соединение",
+                    startedAt = startedAt,
+                )
+            )
+        )
         try {
+            VpnState.set(
+                VpnStatus.Connecting(
+                    ConnectionProgress(
+                        stage = ConnectionStage.LOADING_SERVERS,
+                        detail = "Загружаем сохранённые списки серверов",
+                        startedAt = startedAt,
+                    )
+                )
+            )
             val repo = SubscriptionRepository(this)
             val sources = repo.prepareOffline()
             if (sources.isEmpty()) error("Нет списка серверов. Проверьте интернет и попробуйте ещё раз.")
@@ -101,6 +121,15 @@ class ButoneVpnService : VpnService() {
                 ?: error("Нет разрешения на VPN")
             tun = pfd
 
+            VpnState.set(
+                VpnStatus.Connecting(
+                    ConnectionProgress(
+                        stage = ConnectionStage.STARTING_CORE,
+                        detail = "Запускаем защищённый туннель",
+                        startedAt = startedAt,
+                    )
+                )
+            )
             launchCoreLocked(repo, sources)
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
@@ -164,10 +193,19 @@ class ButoneVpnService : VpnService() {
         var selected: Selection? = null
         var lastVerifiedAt = 0L
         var lastQuickProbeAt = 0L
+        var quickProbeFailures = 0
         var unavailableSince = SystemClock.elapsedRealtime()
         var pollFailures = 0
+        var failedSelectionRounds = 0
         var healthCheckRequested = false
         var network = EventJournal.networkKind(this)
+        var searchStartedAt = (VpnState.status.value as? VpnStatus.Connecting)
+            ?.progress?.startedAt ?: System.currentTimeMillis()
+        var lastProgress = ConnectionProgress(
+            stage = ConnectionStage.CHECKING_SERVERS,
+            detail = "Оцениваем доступные серверы",
+            startedAt = searchStartedAt,
+        )
 
         while (currentCoroutineContext().isActive) {
             try {
@@ -178,6 +216,8 @@ class ButoneVpnService : VpnService() {
                     selected = null
                     lastVerifiedAt = 0L
                     lastQuickProbeAt = 0L
+                    quickProbeFailures = 0
+                    searchStartedAt = System.currentTimeMillis()
                 }
                 val s = api.status(providers)
                 currentCoroutineContext().ensureActive()
@@ -189,27 +229,65 @@ class ButoneVpnService : VpnService() {
                     val quickOk = runCatching { api.probeSelected() > 0 }
                         .onFailure { Log.w(TAG, "quick outbound probe: $it") }
                         .getOrDefault(false)
-                    if (!quickOk) {
+                    if (quickOk) {
+                        quickProbeFailures = 0
+                    } else {
+                        quickProbeFailures++
                         journal.record(
-                            "quick_probe_failed",
-                            "Сервер перестал отвечать на быструю проверку",
-                            mapOf("node" to selected?.candidate?.name?.let { CoreApi.prettyName(it) }),
+                            if (quickProbeFailures >= QUICK_FAILURES_BEFORE_RECHECK) "quick_probe_failed" else "quick_probe_warning",
+                            if (quickProbeFailures >= QUICK_FAILURES_BEFORE_RECHECK)
+                                "Две быстрые проверки не прошли; запускаем полную проверку"
+                            else
+                                "Быстрая проверка не прошла; ждём подтверждение",
+                            mapOf(
+                                "node" to selected?.candidate?.name?.let { CoreApi.prettyName(it) },
+                                "attempt" to quickProbeFailures,
+                            ),
                         )
-                        selected = null
                     }
                 }
-                val needsCheck = selected == null || !stillSelected || now - lastVerifiedAt >= SERVICE_RECHECK_MS
+                val needsCheck = selected == null || !stillSelected ||
+                    now - lastVerifiedAt >= SERVICE_RECHECK_MS ||
+                    quickProbeFailures >= QUICK_FAILURES_BEFORE_RECHECK
                 if (needsCheck) {
-                    VpnState.set(VpnStatus.Connected(alive = s.alive, total = s.total, since = since))
-                    selected = findWorkingNode(
-                        api = api,
-                        providers = providers,
-                        reputation = reputation,
-                        checker = checker,
-                        preferred = selected?.candidate?.name,
+                    val preferred = selected?.candidate?.name
+                    if (selected == null || !stillSelected) {
+                        selected = null
+                        if (lastVerifiedAt > 0L) searchStartedAt = System.currentTimeMillis()
+                    }
+                    lastProgress = ConnectionProgress(
+                        stage = ConnectionStage.CHECKING_SERVERS,
+                        detail = "Найдено ${s.alive} отвечающих серверов",
+                        startedAt = searchStartedAt,
+                        alive = s.alive,
+                        total = s.total,
                     )
+                    fun publishProgress(progress: ConnectionProgress) {
+                        lastProgress = progress
+                        val current = selected
+                        VpnState.set(
+                            if (current == null) VpnStatus.Connecting(progress)
+                            else connectedStatus(current, s.alive, s.total, since, progress)
+                        )
+                    }
+                    publishProgress(lastProgress)
+                    selected = providerMutationLock.withLock {
+                        findWorkingNode(
+                            api = api,
+                            providers = providers,
+                            reputation = reputation,
+                            checker = checker,
+                            preferred = preferred,
+                            startedAt = searchStartedAt,
+                            alive = s.alive,
+                            total = s.total,
+                            onProgress = ::publishProgress,
+                        )
+                    }
                     lastVerifiedAt = SystemClock.elapsedRealtime()
                     lastQuickProbeAt = lastVerifiedAt
+                    quickProbeFailures = 0
+                    if (selected == null) failedSelectionRounds++ else failedSelectionRounds = 0
                 }
 
                 val ready = selected != null
@@ -225,6 +303,7 @@ class ButoneVpnService : VpnService() {
                     unavailableSince = 0L
                     healthCheckRequested = false
                     recoveryAttempts = 0
+                    failedSelectionRounds = 0
                 } else if (unavailableSince == 0L) {
                     unavailableSince = now
                 }
@@ -232,32 +311,23 @@ class ButoneVpnService : VpnService() {
                 val chosen = selected
                 val pretty = chosen?.candidate?.name?.let { CoreApi.prettyName(it) }
                 VpnState.set(
-                    VpnStatus.Connected(
-                        node = pretty,
-                        delayMs = chosen?.candidate?.delayMs,
-                        alive = s.alive,
-                        total = s.total,
-                        serviceOk = chosen?.report?.okCount ?: 0,
-                        serviceTotal = chosen?.report?.total ?: 4,
-                        services = chosen?.report?.results?.map {
-                            ServiceAvailability(it.service, it.ok, it.latencyMs)
-                        }.orEmpty(),
-                        pool = chosen?.candidate?.pool?.let(::poolName),
-                        since = since,
-                    )
+                    if (chosen == null) VpnStatus.Connecting(lastProgress)
+                    else connectedStatus(chosen, s.alive, s.total, since)
                 )
                 val text = if (ready) "Подключено · $pretty · ${chosen?.candidate?.delayMs} мс" else "Подбираем лучший сервер…"
                 nm.notify(NOTIFICATION_ID, notification(getString(R.string.app_name), text))
                 if (!ready && !healthCheckRequested) {
                     healthCheckRequested = true
                     scope.launch {
-                        providers.forEach { provider ->
-                            runCatching { api.healthCheckProvider(provider) }
-                                .onFailure { Log.w(TAG, "health check $provider: $it") }
+                        providerMutationLock.withLock {
+                            providers.forEach { provider ->
+                                runCatching { api.healthCheckProvider(provider) }
+                                    .onFailure { Log.w(TAG, "health check $provider: $it") }
+                            }
                         }
                     }
                 }
-                if (!ready && now - unavailableSince >= RECOVERY_TIMEOUT_MS) {
+                if (!ready && failedSelectionRounds >= 2 && now - unavailableSince >= RECOVERY_TIMEOUT_MS) {
                     journal.record("recovery", "Перезапуск ядра: рабочий сервер не найден")
                     requestRecovery(repo)
                     return
@@ -273,13 +343,19 @@ class ButoneVpnService : VpnService() {
                 if (pollFailures >= 2) {
                     since = null
                     selected = null
-                    VpnState.set(VpnStatus.Connecting)
+                    searchStartedAt = System.currentTimeMillis()
+                    lastProgress = ConnectionProgress(
+                        stage = ConnectionStage.CHECKING_SERVERS,
+                        detail = "Проверяем состояние туннеля",
+                        startedAt = searchStartedAt,
+                    )
+                    VpnState.set(VpnStatus.Connecting(lastProgress))
                     nm.notify(
                         NOTIFICATION_ID,
                         notification(getString(R.string.app_name), "Проверяем соединение…"),
                     )
                 }
-                if (now - unavailableSince >= RECOVERY_TIMEOUT_MS) {
+                if (pollFailures >= 2 && now - unavailableSince >= RECOVERY_TIMEOUT_MS) {
                     requestRecovery(repo)
                     return
                 }
@@ -293,22 +369,61 @@ class ButoneVpnService : VpnService() {
         val report: ServiceHealthChecker.Report,
     )
 
+    private fun connectedStatus(
+        chosen: Selection,
+        alive: Int,
+        total: Int,
+        since: Long?,
+        progress: ConnectionProgress? = null,
+    ) = VpnStatus.Connected(
+        node = CoreApi.prettyName(chosen.candidate.name),
+        delayMs = chosen.candidate.delayMs,
+        alive = alive,
+        total = total,
+        serviceOk = chosen.report.okCount,
+        serviceTotal = chosen.report.total,
+        services = chosen.report.results.map {
+            ServiceAvailability(it.service, it.ok, it.latencyMs)
+        },
+        pool = poolName(chosen.candidate.pool),
+        since = since,
+        progress = progress,
+    )
+
     private suspend fun findWorkingNode(
         api: CoreApi,
         providers: Set<String>,
         reputation: NodeReputation,
         checker: ServiceHealthChecker,
         preferred: String?,
+        startedAt: Long,
+        alive: Int,
+        total: Int,
+        onProgress: (ConnectionProgress) -> Unit,
     ): Selection? {
         val all = api.candidates(providers)
-        val available = all.filterNot { reputation.isCoolingDown(it.name) }
+        val available = all.filterNot { reputation.isCoolingDown(it.id) }
         val ordered = available.sortedWith(
             compareByDescending<CoreApi.Candidate> { it.name == preferred }
                 .thenBy { it.pool }
                 .thenBy { it.delayMs },
         )
-        for (candidate in ordered.take(MAX_SERVICE_CANDIDATES)) {
+        val candidates = ordered.take(MAX_SERVICE_CANDIDATES)
+        for ((index, candidate) in candidates.withIndex()) {
             currentCoroutineContext().ensureActive()
+            val pretty = CoreApi.prettyName(candidate.name)
+            onProgress(
+                ConnectionProgress(
+                    stage = ConnectionStage.CHECKING_SERVERS,
+                    detail = "Выбираем сервер ${index + 1} из ${candidates.size}",
+                    startedAt = startedAt,
+                    candidateIndex = index + 1,
+                    candidateTotal = candidates.size,
+                    alive = alive,
+                    total = total,
+                    node = pretty,
+                )
+            )
             try {
                 api.selectNode(candidate.name)
             } catch (e: Exception) {
@@ -316,7 +431,25 @@ class ButoneVpnService : VpnService() {
                 continue
             }
             delay(350L)
-            val report = runCatching { checker.check() }
+            val report = runCatching {
+                checker.check { completed ->
+                    onProgress(
+                        ConnectionProgress(
+                            stage = ConnectionStage.CHECKING_SERVICES,
+                            detail = "Проверяем сервисы через $pretty",
+                            startedAt = startedAt,
+                            candidateIndex = index + 1,
+                            candidateTotal = candidates.size,
+                            alive = alive,
+                            total = total,
+                            node = pretty,
+                            services = completed.map {
+                                ServiceAvailability(it.service, it.ok, it.latencyMs)
+                            },
+                        )
+                    )
+                }
+            }
                 .onFailure { Log.w(TAG, "service check ${candidate.name}: $it") }
                 .getOrNull()
                 ?: ServiceHealthChecker.Report(emptyList())
@@ -332,14 +465,32 @@ class ButoneVpnService : VpnService() {
                 ),
             )
             if (report.usable) {
-                reputation.recordSuccess(candidate.name)
+                reputation.recordSuccess(candidate.id)
                 return Selection(candidate, report)
             }
-            val cooldown = reputation.recordFailure(candidate.name)
+            val cooldown = reputation.recordFailure(candidate.id)
             journal.record(
                 "node_cooldown",
                 "Нерабочий сервер временно исключён",
                 mapOf("node" to CoreApi.prettyName(candidate.name), "minutes" to cooldown / 60_000),
+            )
+            onProgress(
+                ConnectionProgress(
+                    stage = ConnectionStage.TRYING_NEXT,
+                    detail = if (index + 1 < candidates.size)
+                        "$pretty не подошёл — пробуем следующий"
+                    else
+                        "Подходящий сервер пока не найден",
+                    startedAt = startedAt,
+                    candidateIndex = index + 1,
+                    candidateTotal = candidates.size,
+                    alive = alive,
+                    total = total,
+                    node = pretty,
+                    services = report.results.map {
+                        ServiceAvailability(it.service, it.ok, it.latencyMs)
+                    },
+                )
             )
         }
         return null
@@ -371,7 +522,14 @@ class ButoneVpnService : VpnService() {
                 runCatching { if (Core.isRunning()) Core.stop() }
                     .onFailure { Log.w(TAG, "core stop before recovery", it) }
                 VpnState.apiSecret = null
-                VpnState.set(VpnStatus.Connecting)
+                VpnState.set(
+                    VpnStatus.Connecting(
+                        ConnectionProgress(
+                            stage = ConnectionStage.RECOVERING,
+                            detail = "Восстанавливаем соединение автоматически",
+                        )
+                    )
+                )
                 getSystemService(android.app.NotificationManager::class.java).notify(
                     NOTIFICATION_ID,
                     notification(getString(R.string.app_name), "Переподключение…"),
@@ -434,18 +592,20 @@ class ButoneVpnService : VpnService() {
                 }
 
                 try {
-                    if (source.id in activeProviders) api.reloadProvider(source.id)
+                    if (source.id in activeProviders) {
+                        providerMutationLock.withLock { api.reloadProvider(source.id) }
+                    }
                     currentCoroutineContext().ensureActive()
                     repo.commit(installed)
                     Log.i(TAG, "updated provider ${source.id}")
                     journal.record("source_update", "Список серверов обновлён", mapOf("provider" to source.id))
                 } catch (e: CancellationException) {
                     repo.rollback(installed)
-                    runCatching { api.reloadProvider(source.id) }
+                    runCatching { providerMutationLock.withLock { api.reloadProvider(source.id) } }
                     throw e
                 } catch (e: Exception) {
                     repo.rollback(installed)
-                    runCatching { api.reloadProvider(source.id) }
+                    runCatching { providerMutationLock.withLock { api.reloadProvider(source.id) } }
                     Log.w(TAG, "reload ${source.id}: $e")
                     journal.record("source_update_error", "Не удалось применить список серверов", mapOf("provider" to source.id, "error" to e.toString()))
                 }
@@ -488,6 +648,7 @@ class ButoneVpnService : VpnService() {
         private const val RECOVERY_TIMEOUT_MS = 3 * 60_000L
         private const val SERVICE_RECHECK_MS = 10 * 60_000L
         private const val QUICK_PROBE_INTERVAL_MS = 60_000L
+        private const val QUICK_FAILURES_BEFORE_RECHECK = 2
         private const val MAX_SERVICE_CANDIDATES = 8
         private const val REFRESH_RETRY_MS = 30 * 60 * 1000L
         const val ACTION_START = "app.butone.vpn.START"

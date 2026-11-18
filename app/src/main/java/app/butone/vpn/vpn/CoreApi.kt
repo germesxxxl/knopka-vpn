@@ -23,7 +23,10 @@ class CoreApi(private val secret: String) {
         val delayMs: Int,
         /** 0 regular, 1 restricted/white-list, 2 unnamed or reserve. */
         val pool: Int,
-    )
+    ) {
+        /** Stable identity for reputation; display names can be identical across sources. */
+        val id: String get() = "$provider|$name"
+    }
 
     private data class ProviderSnapshot(
         val candidates: List<Candidate>,
@@ -49,7 +52,7 @@ class CoreApi(private val secret: String) {
     fun candidates(providerNames: Set<String>): List<Candidate> = providerSnapshot(providerNames).candidates
 
     private fun providerSnapshot(providerNames: Set<String>): ProviderSnapshot {
-        val result = mutableListOf<Candidate>()
+        val result = linkedMapOf<String, Candidate>()
         var total = 0
         val providers = JSONObject(get("/providers/proxies")).getJSONObject("providers")
         for (key in providers.keys()) {
@@ -62,11 +65,15 @@ class CoreApi(private val secret: String) {
                 val alive = delay > 0 && (!proxy.has("alive") || proxy.optBoolean("alive"))
                 if (!alive) continue
                 val name = proxy.optString("name")
-                result += Candidate(name, key, delay, pool(key, name))
+                val candidate = Candidate(name, key, delay, pool(key, name))
+                val previous = result[name]
+                if (previous == null || candidate.delayMs < previous.delayMs) {
+                    result[name] = candidate
+                }
             }
         }
         return ProviderSnapshot(
-            candidates = result.sortedWith(compareBy<Candidate> { it.pool }.thenBy { it.delayMs }),
+            candidates = result.values.sortedWith(compareBy<Candidate> { it.pool }.thenBy { it.delayMs }),
             total = total,
         )
     }

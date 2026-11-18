@@ -7,66 +7,86 @@ import app.butone.vpn.diagnostics.EventJournal
 import app.butone.vpn.vpn.CoreApi
 import app.butone.vpn.vpn.VpnState
 import core.Core
+import java.io.File
+import java.io.Writer
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-/**
- * Plain-text report the user can copy and send to the developer.
- * Key signal: connections with inbound type "Tun" prove that other apps'
- * traffic actually goes through the tunnel (pings bypass it).
- */
+/** Creates privacy-filtered reports as files instead of pushing megabytes through ClipboardManager. */
 object Diagnostics {
 
-    fun report(context: Context, days: Int? = 7): String = buildString {
+    data class GeneratedReport(val file: File, val preview: String)
+
+    fun createReport(context: Context, days: Int? = 7): GeneratedReport {
+        val directory = File(context.cacheDir, "reports").apply { mkdirs() }
+        directory.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > DAY_MS }
+            ?.forEach { it.delete() }
+        val stamp = FILE_TIME_FORMAT.format(Date())
+        val period = days?.let { "${it}d" } ?: "all"
+        val file = File(directory, "butone-report-$period-$stamp.txt")
+        file.bufferedWriter(Charsets.UTF_8).use { writer -> writeReport(context, days, writer) }
+        val preview = file.useLines(Charsets.UTF_8) { lines ->
+            lines.take(14).joinToString("\n")
+        } + "\n\nФайл готов: ${file.name}\nРазмер: ${file.length() / 1024} КБ"
+        return GeneratedReport(file, preview)
+    }
+
+    private fun writeReport(context: Context, days: Int?, writer: Writer) {
         val journal = EventJournal(context)
-        appendLine("butone ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-        appendLine("Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
-        appendLine("Core: ${runCatching { Core.version() }.getOrDefault("?")}, running=${runCatching { Core.isRunning() }.getOrDefault(false)}")
-        appendLine("Status: ${VpnState.status.value}")
-        appendLine("Network: ${EventJournal.networkKind(context)}")
-        appendLine("Installed/journal since: ${java.util.Date(journal.installedAt)}")
-        appendLine("Journal size: ${journal.retainedBytes() / 1024} KB")
-        appendLine("Report period: ${days?.let { "$it days" } ?: "all retained history"}")
-        appendLine()
+        writer.appendLine("butone ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        writer.appendLine("Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
+        writer.appendLine("Core: ${runCatching { Core.version() }.getOrDefault("?")}, running=${runCatching { Core.isRunning() }.getOrDefault(false)}")
+        writer.appendLine("Status: ${VpnState.status.value}")
+        writer.appendLine("Network: ${EventJournal.networkKind(context)}")
+        writer.appendLine("Installed/journal since: ${Date(journal.installedAt)}")
+        writer.appendLine("Journal size: ${journal.retainedBytes() / 1024} KB")
+        writer.appendLine("Report period: ${days?.let { "$it days" } ?: "all retained history"}")
+        writer.appendLine()
 
         val secret = VpnState.apiSecret
         if (secret != null && runCatching { Core.isRunning() }.getOrDefault(false)) {
             try {
-                val c = CoreApi(secret).connections()
-                appendLine("Traffic total: down=${kb(c.optLong("downloadTotal"))} up=${kb(c.optLong("uploadTotal"))}")
-                val list = c.optJSONArray("connections")
-                val n = list?.length() ?: 0
+                val connections = CoreApi(secret).connections()
+                writer.appendLine(
+                    "Traffic total: down=${kb(connections.optLong("downloadTotal"))} " +
+                        "up=${kb(connections.optLong("uploadTotal"))}"
+                )
+                val list = connections.optJSONArray("connections")
+                val count = list?.length() ?: 0
                 val byType = mutableMapOf<String, Int>()
-                for (i in 0 until n) {
-                    val t = list!!.getJSONObject(i).optJSONObject("metadata")?.optString("type") ?: "?"
-                    byType[t] = (byType[t] ?: 0) + 1
+                for (index in 0 until count) {
+                    val type = list!!.getJSONObject(index).optJSONObject("metadata")?.optString("type") ?: "?"
+                    byType[type] = (byType[type] ?: 0) + 1
                 }
-                appendLine("Connections: $n by inbound $byType")
-                for (i in 0 until minOf(n, 25)) {
-                    val o = list!!.getJSONObject(i)
-                    val m = o.optJSONObject("metadata")
-                    val host = m?.optString("host")?.ifEmpty { null } ?: m?.optString("destinationIP")
-                    val chains = o.optJSONArray("chains")?.let { a ->
-                        (0 until a.length()).joinToString(" < ") { a.getString(it) }
-                    }
-                    appendLine(
-                        "  ${m?.optString("type")} ${m?.optString("network")} $host:${m?.optString("destinationPort")}" +
-                            " rule=${o.optString("rule")} via=$chains down=${kb(o.optLong("download"))}"
-                    )
-                }
+                // Destinations and browsing domains are deliberately omitted from exported reports.
+                writer.appendLine("Connections: $count by inbound $byType")
             } catch (e: Exception) {
-                appendLine("API error: $e")
+                writer.appendLine("API error: ${redact(e.toString())}")
             }
         } else {
-            appendLine("Core API: not running")
+            writer.appendLine("Core API: not running")
         }
 
-        appendLine()
-        appendLine("---- core log (last 120) ----")
+        writer.appendLine()
+        writer.appendLine("---- core log (last 120, addresses redacted) ----")
         val log = runCatching { Core.logs() }.getOrDefault("")
-        appendLine(log.lines().takeLast(120).joinToString("\n"))
-        appendLine()
-        appendLine("---- persistent event journal ----")
-        appendLine(journal.read(days))
+        log.lines().takeLast(120).forEach { writer.appendLine(redact(it)) }
+        writer.appendLine()
+        writer.appendLine("---- persistent event journal ----")
+        journal.writeTo(writer, days)
     }
 
+    private fun redact(value: String): String = value
+        .replace(UUID_REGEX, "<id>")
+        .replace(IPV4_REGEX, "<ip>")
+        .replace(AUTHORITY_REGEX, "${'$'}1<credentials>@")
+
     private fun kb(bytes: Long) = "${bytes / 1024} KB"
+
+    private const val DAY_MS = 24L * 60 * 60 * 1000
+    private val FILE_TIME_FORMAT = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+    private val UUID_REGEX = Regex("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b")
+    private val IPV4_REGEX = Regex("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])")
+    private val AUTHORITY_REGEX = Regex("(://)[^/@\\s]+@")
 }

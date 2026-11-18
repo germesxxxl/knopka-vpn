@@ -44,7 +44,7 @@ class ToggleTileService : TileService() {
         if (Build.VERSION.SDK_INT >= 29) {
             tile.subtitle = when (status) {
                 is VpnStatus.Connected -> status.node ?: "Подбор сервера…"
-                VpnStatus.Connecting -> "Подключение…"
+                is VpnStatus.Connecting -> status.progress.detail
                 else -> null
             }
         }

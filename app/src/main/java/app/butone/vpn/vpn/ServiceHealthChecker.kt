@@ -29,12 +29,22 @@ class ServiceHealthChecker(private val proxyPort: Int = ConfigBuilder.MIXED_PORT
         }
     }
 
-    suspend fun check(): Report = coroutineScope {
+    suspend fun check(onProgress: (List<Result>) -> Unit = {}): Report = coroutineScope {
+        val completed = mutableListOf<Result>()
+        val progressLock = Any()
+        fun tracked(block: () -> Result): Result {
+            val result = block()
+            synchronized(progressLock) {
+                completed += result
+                onProgress(completed.toList())
+            }
+            return result
+        }
         val probes = listOf(
-            async(Dispatchers.IO) { http("YouTube", "https://www.youtube.com/generate_204", exactStatus = 204) },
-            async(Dispatchers.IO) { http("Instagram", "https://www.instagram.com/robots.txt") },
-            async(Dispatchers.IO) { telegram() },
-            async(Dispatchers.IO) { http("WhatsApp", "https://web.whatsapp.com/favicon.ico") },
+            async(Dispatchers.IO) { tracked { http("YouTube", "https://www.youtube.com/generate_204", exactStatus = 204) } },
+            async(Dispatchers.IO) { tracked { http("Instagram", "https://www.instagram.com/robots.txt") } },
+            async(Dispatchers.IO) { tracked { telegram() } },
+            async(Dispatchers.IO) { tracked { http("WhatsApp", "https://web.whatsapp.com/favicon.ico") } },
         )
         Report(probes.map { it.await() })
     }

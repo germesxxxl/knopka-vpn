@@ -12,8 +12,8 @@ android {
         applicationId = "app.butone.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = (System.getenv("VERSION_CODE") ?: "14").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "0.1.14"
+        versionCode = (System.getenv("VERSION_CODE") ?: "20").toInt()
+        versionName = System.getenv("VERSION_NAME") ?: "0.1.20"
     }
 
     flavorDimensions += "device"
@@ -60,7 +60,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             if (ksPath != null) signingConfig = signingConfigs.getByName("release")
         }
     }

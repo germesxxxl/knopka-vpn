@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.butone.vpn.R
 import app.butone.vpn.ads.Ads
+import app.butone.vpn.vpn.ConnectionProgress
+import app.butone.vpn.vpn.ConnectionStage
 import app.butone.vpn.vpn.ServiceAvailability
 import app.butone.vpn.vpn.VpnStatus
 import kotlinx.coroutines.delay
@@ -78,9 +80,15 @@ private enum class Phase { Off, Searching, On, Error }
 
 private fun phaseOf(s: VpnStatus) = when (s) {
     VpnStatus.Disconnected -> Phase.Off
-    VpnStatus.Connecting -> Phase.Searching
+    is VpnStatus.Connecting -> Phase.Searching
     is VpnStatus.Connected -> if (s.node == null) Phase.Searching else Phase.On
     is VpnStatus.Error -> Phase.Error
+}
+
+private fun progressOf(s: VpnStatus): ConnectionProgress? = when (s) {
+    is VpnStatus.Connecting -> s.progress
+    is VpnStatus.Connected -> s.progress
+    else -> null
 }
 
 @Composable
@@ -126,7 +134,7 @@ fun MainScreen(status: VpnStatus, onToggle: () -> Unit, onReport: () -> Unit) {
             }
 
             Spacer(Modifier.weight(1f))
-            PowerButton(phase, onToggle)
+            PowerButton(phase, progressOf(status), onToggle)
             Spacer(Modifier.height(28.dp))
 
             Box(Modifier.height(250.dp), contentAlignment = Alignment.TopCenter) {
@@ -142,7 +150,7 @@ fun MainScreen(status: VpnStatus, onToggle: () -> Unit, onReport: () -> Unit) {
 }
 
 @Composable
-private fun PowerButton(phase: Phase, onToggle: () -> Unit) {
+private fun PowerButton(phase: Phase, progress: ConnectionProgress?, onToggle: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val t = rememberInfiniteTransition(label = "button")
     val breathe by t.animateFloat(
@@ -189,10 +197,28 @@ private fun PowerButton(phase: Phase, onToggle: () -> Unit) {
                 // Rotating arc while connecting / pinging servers.
                 Phase.Searching -> {
                     val r = base + 14.dp.toPx()
+                    val completed = progress?.services?.associateBy { it.name }.orEmpty()
+                    listOf("YouTube", "Telegram", "Instagram", "WhatsApp").forEachIndexed { index, name ->
+                        val service = completed[name]
+                        val color = when (service?.available) {
+                            true -> Palette.GreenGlow
+                            false -> Palette.Red
+                            null -> Color.White.copy(alpha = 0.18f)
+                        }
+                        drawArc(
+                            color = color,
+                            startAngle = -90f + index * 90f + 6f,
+                            sweepAngle = 72f,
+                            useCenter = false,
+                            topLeft = Offset(center.x - r, center.y - r),
+                            size = Size(r * 2, r * 2),
+                            style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round),
+                        )
+                    }
                     drawArc(
                         color = Palette.Amber,
                         startAngle = spin,
-                        sweepAngle = 110f,
+                        sweepAngle = 24f,
                         useCenter = false,
                         topLeft = Offset(center.x - r, center.y - r),
                         size = Size(r * 2, r * 2),
@@ -248,12 +274,16 @@ private fun Info(phase: Phase, status: VpnStatus) {
                 Sub("Бесплатно · без регистрации")
             }
             Phase.Searching -> {
-                Title("Подбираем лучший сервер…")
-                val connected = status as? VpnStatus.Connected
-                val total = connected?.total ?: 0
-                val alive = connected?.alive ?: 0
-                Sub(if (total > 0) "Отвечают $alive из $total серверов" else "Подключаемся")
-                Sub("Проверяем YouTube, Telegram, Instagram и WhatsApp")
+                val progress = progressOf(status) ?: ConnectionProgress()
+                Title(stageTitle(progress.stage))
+                Sub(progress.detail, maxWidth = true)
+                if (progress.candidateTotal > 0) {
+                    Sub("Сервер ${progress.candidateIndex} из ${progress.candidateTotal}")
+                } else if (progress.total > 0) {
+                    Sub("Отвечают ${progress.alive} из ${progress.total} серверов")
+                }
+                ConnectionServiceGrid(progress.services)
+                SearchTimer(progress.startedAt)
             }
             Phase.Error -> {
                 Title("Не удалось подключиться")
@@ -287,6 +317,72 @@ private fun Info(phase: Phase, status: VpnStatus) {
                 s.since?.let { SessionTimer(it) }
             }
         }
+    }
+}
+
+private fun stageTitle(stage: ConnectionStage): String = when (stage) {
+    ConnectionStage.PREPARING -> "Подготавливаем подключение"
+    ConnectionStage.LOADING_SERVERS -> "Загружаем серверы"
+    ConnectionStage.STARTING_CORE -> "Запускаем туннель"
+    ConnectionStage.CHECKING_SERVERS -> "Подбираем лучший сервер"
+    ConnectionStage.CHECKING_SERVICES -> "Проверяем доступность"
+    ConnectionStage.TRYING_NEXT -> "Пробуем другой сервер"
+    ConnectionStage.RECOVERING -> "Восстанавливаем соединение"
+}
+
+@Composable
+private fun ConnectionServiceGrid(completed: List<ServiceAvailability>) {
+    val byName = completed.associateBy { it.name }
+    Spacer(Modifier.height(10.dp))
+    listOf("YouTube", "Telegram", "Instagram", "WhatsApp")
+        .chunked(2)
+        .forEach { row ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(vertical = 2.dp),
+            ) {
+                row.forEach { name ->
+                    val service = byName[name]
+                    val color = when (service?.available) {
+                        true -> Palette.GreenGlow
+                        false -> Palette.Red
+                        null -> Palette.Amber
+                    }
+                    val marker = when (service?.available) {
+                        true -> "✓"
+                        false -> "✕"
+                        null -> "…"
+                    }
+                    Text(
+                        text = "$marker $name",
+                        color = color,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .width(132.dp)
+                            .background(color.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                    )
+                }
+            }
+        }
+}
+
+@Composable
+private fun SearchTimer(startedAt: Long) {
+    val now by produceState(System.currentTimeMillis(), startedAt) {
+        while (true) {
+            value = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
+    val seconds = ((now - startedAt) / 1000).coerceAtLeast(0)
+    Spacer(Modifier.height(8.dp))
+    Text("Прошло ${seconds} с", color = Palette.TextDim, fontSize = 13.sp)
+    when {
+        seconds >= 45 -> Sub("Проверяем резервный пул — ничего нажимать не нужно", maxWidth = true)
+        seconds >= 20 -> Sub("Текущая сеть отклоняет часть маршрутов, поиск продолжается", maxWidth = true)
     }
 }
 
@@ -404,12 +500,18 @@ fun ReportDialog(
     text: String?,
     periodDays: Int?,
     onPeriod: (Int?) -> Unit,
-    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onSave: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onCopy, enabled = text != null) { Text("Скопировать") } },
+        confirmButton = {
+            Row {
+                TextButton(onClick = onSave, enabled = text != null) { Text("Сохранить") }
+                TextButton(onClick = onShare, enabled = text != null) { Text("Поделиться") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
         title = { Text("Отчёт для разработчика") },
         text = {
@@ -425,7 +527,7 @@ fun ReportDialog(
                     }
                 }
                 Text(
-                    text ?: "Собираем…",
+                    text ?: "Формируем текстовый файл…",
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),

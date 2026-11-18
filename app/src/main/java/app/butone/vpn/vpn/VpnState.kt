@@ -9,9 +9,32 @@ data class ServiceAvailability(
     val latencyMs: Long,
 )
 
+enum class ConnectionStage {
+    PREPARING,
+    LOADING_SERVERS,
+    STARTING_CORE,
+    CHECKING_SERVERS,
+    CHECKING_SERVICES,
+    TRYING_NEXT,
+    RECOVERING,
+}
+
+data class ConnectionProgress(
+    val stage: ConnectionStage = ConnectionStage.PREPARING,
+    val detail: String = "Подготавливаем защищённое соединение",
+    val startedAt: Long = System.currentTimeMillis(),
+    val candidateIndex: Int = 0,
+    val candidateTotal: Int = 0,
+    val alive: Int = 0,
+    val total: Int = 0,
+    val node: String? = null,
+    /** Completed checks; missing services are still pending. */
+    val services: List<ServiceAvailability> = emptyList(),
+)
+
 sealed interface VpnStatus {
     data object Disconnected : VpnStatus
-    data object Connecting : VpnStatus
+    data class Connecting(val progress: ConnectionProgress = ConnectionProgress()) : VpnStatus
 
     /** [node] is null until Mihomo has finished the first round of ping tests. */
     data class Connected(
@@ -26,6 +49,8 @@ sealed interface VpnStatus {
         val pool: String? = null,
         /** When a working node was first found (System.currentTimeMillis), for the session timer. */
         val since: Long? = null,
+        /** Present only while an existing connection is being re-checked or replaced. */
+        val progress: ConnectionProgress? = null,
     ) : VpnStatus
 
     data class Error(val message: String) : VpnStatus

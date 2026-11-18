@@ -191,7 +191,7 @@ private fun TvScreen(status: VpnStatus, onToggle: () -> Unit) {
                         }
                     } ?: "Проверяем ${status.total} серверов"
                     is VpnStatus.Error -> status.message
-                    VpnStatus.Connecting -> "Переподключение выполняется автоматически"
+                    is VpnStatus.Connecting -> status.progress.detail
                     VpnStatus.Disconnected -> "Нажмите центральную кнопку на пульте"
                 }
                 Text(details, color = Palette.TextDim, fontSize = 25.sp, lineHeight = 34.sp)

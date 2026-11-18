@@ -5,6 +5,8 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import org.json.JSONObject
 import java.io.File
+import java.io.StringWriter
+import java.io.Writer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -45,10 +47,17 @@ class EventJournal(context: Context) {
     }
 
     /** Human-readable event history for a report. null means the whole retained history. */
-    fun read(days: Int?): String = synchronized(FILE_LOCK) {
+    fun read(days: Int?): String {
+        val output = StringWriter()
+        writeTo(output, days)
+        return output.toString().take(MAX_REPORT_CHARS)
+    }
+
+    /** Streams a full report so large histories never cross Android's clipboard/Binder limit. */
+    fun writeTo(writer: Writer, days: Int?) = synchronized(FILE_LOCK) {
         val since = days?.let { System.currentTimeMillis() - it * DAY_MS } ?: Long.MIN_VALUE
-        val rendered = mutableListOf<String>()
         val counts = linkedMapOf<String, Int>()
+        var eventCount = 0
         var passedProbes = 0
         var failedProbes = 0
         files().forEach { file ->
@@ -57,36 +66,43 @@ class EventJournal(context: Context) {
                     runCatching { JSONObject(line) }.getOrNull()?.let { item ->
                         val at = item.optLong("at")
                         if (at >= since) {
+                            eventCount++
                             val type = item.optString("type")
                             val message = item.optString("message")
                             counts[type] = (counts[type] ?: 0) + 1
                             if (type == "service_probe") {
                                 if (message.startsWith("Сервер прошёл")) passedProbes++ else failedProbes++
                             }
-                            val keys = item.keys().asSequence()
-                                .filterNot { it in setOf("at", "type", "message") }
-                                .toList()
-                            rendered += buildString {
-                                append(TIME_FORMAT.format(Date(at)))
-                                    .append("  ").append(type)
-                                    .append("  ").append(message)
-                                if (keys.isNotEmpty()) {
-                                    append("  ")
-                                    append(keys.joinToString(", ") { "$it=${item.optString(it)}" })
-                                }
-                            }
                         }
                     }
                 }
             }
         }
-        buildString {
-            appendLine("Events: ${rendered.size}")
-            appendLine("Event counts: ${counts.entries.sortedByDescending { it.value }.joinToString { "${it.key}=${it.value}" }}")
-            appendLine("Service probes: passed=$passedProbes failed=$failedProbes")
-            appendLine("Order: newest first")
-            rendered.asReversed().forEach { appendLine(it) }
-        }.take(MAX_REPORT_CHARS)
+        writer.appendLine("Events: $eventCount")
+        writer.appendLine("Event counts: ${counts.entries.sortedByDescending { it.value }.joinToString { "${it.key}=${it.value}" }}")
+        writer.appendLine("Service probes: passed=$passedProbes failed=$failedProbes")
+        writer.appendLine("Order: newest first")
+
+        files().asReversed().forEach { file ->
+            file.readLines(Charsets.UTF_8).asReversed().forEach { line ->
+                val item = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
+                val at = item.optLong("at")
+                if (at < since) return@forEach
+                val type = item.optString("type")
+                val message = item.optString("message")
+                val keys = item.keys().asSequence()
+                    .filterNot { it in setOf("at", "type", "message") }
+                    .toList()
+                writer.append(TIME_FORMAT.format(Date(at)))
+                    .append("  ").append(type)
+                    .append("  ").append(message)
+                if (keys.isNotEmpty()) {
+                    writer.append("  ")
+                    writer.append(keys.joinToString(", ") { "$it=${item.optString(it)}" })
+                }
+                writer.appendLine()
+            }
+        }
     }
 
     fun retainedBytes(): Long = synchronized(FILE_LOCK) { files().sumOf { it.length() } }
