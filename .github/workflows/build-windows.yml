@@ -89,6 +89,7 @@ jobs:
             -p:PublishSingleFile=true `
             -p:Version=$version `
             --output $stage
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
           Copy-Item (Join-Path $env:RUNNER_TEMP "mihomo.exe") $stage
           Copy-Item (Join-Path $env:RUNNER_TEMP "bundle") (Join-Path $stage "bundle") -Recurse
           Copy-Item LICENSE $stage

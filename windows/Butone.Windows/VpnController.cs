@@ -207,7 +207,8 @@ internal sealed class VpnController : IAsyncDisposable
 
     private async Task<Selection?> FindWorkingNodeAsync(IReadOnlyList<string> preferredIds, CancellationToken cancellationToken)
     {
-        var api = _api ?? return null;
+        var api = _api;
+        if (api is null) return null;
         await _mutation.WaitAsync(cancellationToken);
         try
         {
@@ -385,7 +386,8 @@ internal sealed class VpnController : IAsyncDisposable
 
     private async Task SwitchFromDeadNodeAsync(Selection failed, CancellationToken cancellationToken)
     {
-        var api = _api ?? return;
+        var api = _api;
+        if (api is null) return;
         var failedName = CoreApi.PrettyName(failed.Candidate.Name);
         RecordFailure(failed.Candidate.Id);
         var closed = await api.CloseConnectionsThroughAsync(failed.Candidate.Name, cancellationToken);
