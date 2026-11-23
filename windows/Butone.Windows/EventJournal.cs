@@ -10,7 +10,7 @@ internal sealed class EventJournal
     public EventJournal(string directory)
     {
         Directory.CreateDirectory(directory);
-        _path = Path.Combine(directory, "butone-windows-report.jsonl");
+        _path = System.IO.Path.Combine(directory, "butone-windows-report.jsonl");
     }
 
     public string Path => _path;
