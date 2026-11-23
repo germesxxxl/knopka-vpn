@@ -47,7 +47,12 @@ class ButoneVpnService : VpnService() {
     private var monitorJob: Job? = null
     private var refreshJob: Job? = null
     private var recoveryJob: Job? = null
+    private var standbyJob: Job? = null
     private var recoveryAttempts = 0
+    @Volatile private var searchStartedAtMs = 0L
+    @Volatile private var standbyScanActive = false
+    @Volatile private var hotStandbys: List<HotStandby> = emptyList()
+    @Volatile private var lastStandbyScanAt = 0L
     private val journal by lazy { EventJournal(this) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -72,6 +77,7 @@ class ButoneVpnService : VpnService() {
     override fun onDestroy() {
         monitorJob?.cancel()
         refreshJob?.cancel()
+        standbyJob?.cancel()
         scope.cancel()
         if (Core.isRunning()) Core.stop()
         tun?.close()
@@ -84,6 +90,9 @@ class ButoneVpnService : VpnService() {
     private fun startVpnLocked() {
         if (tun != null) return
         val startedAt = System.currentTimeMillis()
+        searchStartedAtMs = startedAt
+        hotStandbys = emptyList()
+        lastStandbyScanAt = 0L
         VpnState.set(
             VpnStatus.Connecting(
                 ConnectionProgress(
@@ -142,9 +151,15 @@ class ButoneVpnService : VpnService() {
         monitorJob?.cancel()
         refreshJob?.cancel()
         recoveryJob?.cancel()
+        standbyJob?.cancel()
         monitorJob = null
         refreshJob = null
         recoveryJob = null
+        standbyJob = null
+        standbyScanActive = false
+        hotStandbys = emptyList()
+        lastStandbyScanAt = 0L
+        searchStartedAtMs = 0L
         try {
             if (Core.isRunning()) Core.stop()
         } catch (e: Exception) {
@@ -189,18 +204,18 @@ class ButoneVpnService : VpnService() {
         val nm = getSystemService(android.app.NotificationManager::class.java)
         val reputation = NodeReputation(this)
         val checker = ServiceHealthChecker()
+        val trafficWatchdog = TrafficWatchdog()
         var since: Long? = null
         var selected: Selection? = null
-        var lastVerifiedAt = 0L
         var lastQuickProbeAt = 0L
         var quickProbeFailures = 0
+        var trafficSuspicion = false
         var unavailableSince = SystemClock.elapsedRealtime()
         var pollFailures = 0
         var failedSelectionRounds = 0
         var healthCheckRequested = false
         var network = EventJournal.networkKind(this)
-        var searchStartedAt = (VpnState.status.value as? VpnStatus.Connecting)
-            ?.progress?.startedAt ?: System.currentTimeMillis()
+        var searchStartedAt = ensureSearchStartedAt()
         var lastProgress = ConnectionProgress(
             stage = ConnectionStage.CHECKING_SERVERS,
             detail = "Оцениваем доступные серверы",
@@ -214,46 +229,130 @@ class ButoneVpnService : VpnService() {
                     journal.record("network_change", "Сеть изменилась", mapOf("from" to network, "to" to currentNetwork))
                     network = currentNetwork
                     selected = null
-                    lastVerifiedAt = 0L
                     lastQuickProbeAt = 0L
                     quickProbeFailures = 0
-                    searchStartedAt = System.currentTimeMillis()
+                    trafficSuspicion = false
+                    trafficWatchdog.reset()
+                    hotStandbys = emptyList()
+                    lastStandbyScanAt = 0L
+                    searchStartedAt = beginSearchNow()
                 }
                 val s = api.status(providers)
                 currentCoroutineContext().ensureActive()
                 pollFailures = 0
                 val now = SystemClock.elapsedRealtime()
                 val stillSelected = selected?.candidate?.name == s.node && s.currentAlive
-                if (stillSelected && now - lastQuickProbeAt >= QUICK_PROBE_INTERVAL_MS) {
+
+                if (stillSelected) {
+                    val snapshot = runCatching { api.trafficSnapshot(selected?.candidate?.name) }
+                        .onFailure { Log.w(TAG, "traffic snapshot: $it") }
+                        .getOrNull()
+                    if (snapshot != null) {
+                        val evaluation = trafficWatchdog.observe(
+                            snapshot = snapshot,
+                            now = now,
+                            ignoreSample = standbyScanActive,
+                        )
+                        if (evaluation.suspect) {
+                            if (!trafficSuspicion) {
+                                journal.record(
+                                    "traffic_stall_suspected",
+                                    "Обнаружен исходящий трафик без нормального ответа",
+                                    mapOf(
+                                        "node" to selected?.candidate?.name?.let { CoreApi.prettyName(it) },
+                                        "reason" to evaluation.reason,
+                                        "active" to snapshot.activeProxied,
+                                        "upload_only" to snapshot.uploadOnlyProxied,
+                                        "dns_stalled" to snapshot.stalledDnsConnections,
+                                    ),
+                                )
+                            }
+                            trafficSuspicion = true
+                        }
+                    }
+                }
+
+                val probeInterval = when {
+                    trafficSuspicion -> TRAFFIC_CONFIRM_INTERVAL_MS
+                    quickProbeFailures > 0 -> QUICK_RETRY_INTERVAL_MS
+                    else -> QUICK_PROBE_INTERVAL_MS
+                }
+                if (stillSelected && now - lastQuickProbeAt >= probeInterval) {
                     lastQuickProbeAt = now
-                    val quickOk = runCatching { api.probeSelected() > 0 }
+                    val quickOk = runCatching { api.probeSelectedQuorum() }
                         .onFailure { Log.w(TAG, "quick outbound probe: $it") }
                         .getOrDefault(false)
                     if (quickOk) {
+                        if (trafficSuspicion || quickProbeFailures > 0) {
+                            journal.record(
+                                "traffic_recovered",
+                                "Туннель ответил на независимые проверки; сервер сохраняем",
+                                mapOf("node" to selected?.candidate?.name?.let { CoreApi.prettyName(it) }),
+                            )
+                        }
                         quickProbeFailures = 0
+                        trafficSuspicion = false
+                        trafficWatchdog.reset()
                     } else {
                         quickProbeFailures++
+                        val required = if (trafficSuspicion) {
+                            TRAFFIC_FAILURES_BEFORE_SWITCH
+                        } else {
+                            QUICK_FAILURES_BEFORE_RECHECK
+                        }
                         journal.record(
-                            if (quickProbeFailures >= QUICK_FAILURES_BEFORE_RECHECK) "quick_probe_failed" else "quick_probe_warning",
-                            if (quickProbeFailures >= QUICK_FAILURES_BEFORE_RECHECK)
-                                "Две быстрые проверки не прошли; запускаем полную проверку"
+                            if (quickProbeFailures >= required) "quick_probe_failed" else "quick_probe_warning",
+                            if (quickProbeFailures >= required)
+                                "Независимые проверки подтвердили потерю связи"
                             else
-                                "Быстрая проверка не прошла; ждём подтверждение",
+                                "Проверка не прошла; ждём повторное подтверждение",
                             mapOf(
                                 "node" to selected?.candidate?.name?.let { CoreApi.prettyName(it) },
                                 "attempt" to quickProbeFailures,
+                                "required" to required,
+                                "traffic_suspected" to trafficSuspicion,
                             ),
                         )
                     }
                 }
-                val needsCheck = selected == null || !stillSelected ||
-                    now - lastVerifiedAt >= SERVICE_RECHECK_MS ||
-                    quickProbeFailures >= QUICK_FAILURES_BEFORE_RECHECK
+
+                val requiredFailures = if (trafficSuspicion) {
+                    TRAFFIC_FAILURES_BEFORE_SWITCH
+                } else {
+                    QUICK_FAILURES_BEFORE_RECHECK
+                }
+                val failureConfirmed = stillSelected && quickProbeFailures >= requiredFailures
+                if (failureConfirmed) {
+                    val failed = selected
+                    if (failed != null) {
+                        val cooldown = reputation.recordFailure(failed.candidate.id)
+                        val closed = runCatching { api.closeConnectionsThrough(failed.candidate.name) }
+                            .getOrDefault(0)
+                        journal.record(
+                            "traffic_stall_confirmed",
+                            "Рабочий сервер перестал передавать ответы; переключаемся на резерв",
+                            mapOf(
+                                "node" to CoreApi.prettyName(failed.candidate.name),
+                                "closed_connections" to closed,
+                                "cooldown_minutes" to cooldown / 60_000,
+                            ),
+                        )
+                    }
+                    selected = null
+                    quickProbeFailures = 0
+                    trafficSuspicion = false
+                    trafficWatchdog.reset()
+                    searchStartedAt = beginSearchNow()
+                    if (unavailableSince == 0L) unavailableSince = now
+                }
+
+                val selectedStillAlive = selected?.candidate?.name == s.node && s.currentAlive
+                val needsCheck = selected == null || !selectedStillAlive
                 if (needsCheck) {
-                    val preferred = selected?.candidate?.name
-                    if (selected == null || !stillSelected) {
+                    val preferred = if (failureConfirmed) null else selected?.candidate?.name
+                    if (selected == null || !selectedStillAlive) {
                         selected = null
-                        if (lastVerifiedAt > 0L) searchStartedAt = System.currentTimeMillis()
+                        searchStartedAt = ensureSearchStartedAt()
                     }
                     lastProgress = ConnectionProgress(
                         stage = ConnectionStage.CHECKING_SERVERS,
@@ -278,16 +377,22 @@ class ButoneVpnService : VpnService() {
                             reputation = reputation,
                             checker = checker,
                             preferred = preferred,
+                            standbyIds = freshStandbyIds(),
                             startedAt = searchStartedAt,
                             alive = s.alive,
                             total = s.total,
                             onProgress = ::publishProgress,
                         )
                     }
-                    lastVerifiedAt = SystemClock.elapsedRealtime()
-                    lastQuickProbeAt = lastVerifiedAt
+                    lastQuickProbeAt = SystemClock.elapsedRealtime()
                     quickProbeFailures = 0
-                    if (selected == null) failedSelectionRounds++ else failedSelectionRounds = 0
+                    trafficSuspicion = false
+                    trafficWatchdog.reset()
+                    if (selected == null) {
+                        failedSelectionRounds++
+                    } else {
+                        failedSelectionRounds = 0
+                    }
                 }
 
                 val ready = selected != null
@@ -304,6 +409,8 @@ class ButoneVpnService : VpnService() {
                     healthCheckRequested = false
                     recoveryAttempts = 0
                     failedSelectionRounds = 0
+                    searchStartedAtMs = 0L
+                    scheduleStandbyScan(api, providers, reputation, selected!!)
                 } else if (unavailableSince == 0L) {
                     unavailableSince = now
                 }
@@ -343,7 +450,9 @@ class ButoneVpnService : VpnService() {
                 if (pollFailures >= 2) {
                     since = null
                     selected = null
-                    searchStartedAt = System.currentTimeMillis()
+                    trafficSuspicion = false
+                    trafficWatchdog.reset()
+                    searchStartedAt = ensureSearchStartedAt()
                     lastProgress = ConnectionProgress(
                         stage = ConnectionStage.CHECKING_SERVERS,
                         detail = "Проверяем состояние туннеля",
@@ -367,6 +476,11 @@ class ButoneVpnService : VpnService() {
     private data class Selection(
         val candidate: CoreApi.Candidate,
         val report: ServiceHealthChecker.Report,
+    )
+
+    private data class HotStandby(
+        val candidate: CoreApi.Candidate,
+        val checkedAt: Long,
     )
 
     private fun connectedStatus(
@@ -396,6 +510,7 @@ class ButoneVpnService : VpnService() {
         reputation: NodeReputation,
         checker: ServiceHealthChecker,
         preferred: String?,
+        standbyIds: List<String>,
         startedAt: Long,
         alive: Int,
         total: Int,
@@ -403,8 +518,16 @@ class ButoneVpnService : VpnService() {
     ): Selection? {
         val all = api.candidates(providers)
         val available = all.filterNot { reputation.isCoolingDown(it.id) }
+        val standbyRanks = standbyIds.withIndex().associate { it.value to it.index }
         val ordered = available.sortedWith(
-            compareByDescending<CoreApi.Candidate> { it.name == preferred }
+            compareBy<CoreApi.Candidate> {
+                when {
+                    it.name == preferred -> -1
+                    it.id in standbyRanks -> standbyRanks.getValue(it.id)
+                    else -> Int.MAX_VALUE
+                }
+            }
+                .thenBy { reputation.penalty(it.id) }
                 .thenBy { it.pool }
                 .thenBy { it.delayMs },
         )
@@ -502,6 +625,80 @@ class ButoneVpnService : VpnService() {
         else -> "резервный"
     }
 
+    private fun ensureSearchStartedAt(): Long {
+        val existing = searchStartedAtMs
+        if (existing > 0L) return existing
+        return System.currentTimeMillis().also { searchStartedAtMs = it }
+    }
+
+    private fun beginSearchNow(): Long = System.currentTimeMillis().also { searchStartedAtMs = it }
+
+    private fun freshStandbyIds(): List<String> {
+        val cutoff = SystemClock.elapsedRealtime() - STANDBY_FRESH_MS
+        return hotStandbys.filter { it.checkedAt >= cutoff }.map { it.candidate.id }
+    }
+
+    /**
+     * Keep two recently proven candidates ready without touching AUTO. A scan
+     * runs outside the monitor loop, tests only a small shortlist, and never
+     * changes the user's active route.
+     */
+    private fun scheduleStandbyScan(
+        api: CoreApi,
+        providers: Set<String>,
+        reputation: NodeReputation,
+        current: Selection,
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        if (standbyJob?.isActive == true || now - lastStandbyScanAt < STANDBY_SCAN_INTERVAL_MS) return
+        lastStandbyScanAt = now
+        standbyJob = scope.launch {
+            standbyScanActive = true
+            try {
+                val candidates = api.candidates(providers)
+                    .asSequence()
+                    .filter { it.id != current.candidate.id }
+                    .filterNot { reputation.isCoolingDown(it.id) }
+                    .sortedWith(
+                        compareBy<CoreApi.Candidate> { it.provider == current.candidate.provider }
+                            .thenBy { reputation.penalty(it.id) }
+                            .thenBy { it.pool }
+                            .thenBy { it.delayMs }
+                    )
+                    .take(MAX_STANDBY_SCAN_CANDIDATES)
+                    .toList()
+                val verified = mutableListOf<HotStandby>()
+                for (candidate in candidates) {
+                    currentCoroutineContext().ensureActive()
+                    if (runCatching { api.probeCandidate(candidate) }.getOrDefault(false)) {
+                        verified += HotStandby(candidate, SystemClock.elapsedRealtime())
+                        if (verified.size >= HOT_STANDBY_COUNT) break
+                    }
+                }
+                val oldIds = freshStandbyIds()
+                hotStandbys = verified
+                val newIds = verified.map { it.candidate.id }
+                if (newIds != oldIds) {
+                    journal.record(
+                        "standby_ready",
+                        "Резервные серверы проверены в фоне",
+                        mapOf(
+                            "count" to verified.size,
+                            "nodes" to verified.joinToString("; ") { CoreApi.prettyName(it.candidate.name) },
+                        ),
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "standby scan: $e")
+            } finally {
+                standbyScanActive = false
+                standbyJob = null
+            }
+        }
+    }
+
     /** Restarts only Mihomo while retaining Android's VPN permission and TUN. */
     private fun requestRecovery(repo: SubscriptionRepository) {
         if (recoveryJob?.isActive == true || tun == null) return
@@ -517,8 +714,13 @@ class ButoneVpnService : VpnService() {
                 if (tun == null) return@withLock
                 monitorJob?.cancel()
                 refreshJob?.cancel()
+                standbyJob?.cancel()
                 monitorJob = null
                 refreshJob = null
+                standbyJob = null
+                standbyScanActive = false
+                hotStandbys = emptyList()
+                lastStandbyScanAt = 0L
                 runCatching { if (Core.isRunning()) Core.stop() }
                     .onFailure { Log.w(TAG, "core stop before recovery", it) }
                 VpnState.apiSecret = null
@@ -527,6 +729,7 @@ class ButoneVpnService : VpnService() {
                         ConnectionProgress(
                             stage = ConnectionStage.RECOVERING,
                             detail = "Восстанавливаем соединение автоматически",
+                            startedAt = ensureSearchStartedAt(),
                         )
                     )
                 )
@@ -646,10 +849,16 @@ class ButoneVpnService : VpnService() {
         private const val TAG = "ButoneVpn"
         private const val NOTIFICATION_ID = 1
         private const val RECOVERY_TIMEOUT_MS = 3 * 60_000L
-        private const val SERVICE_RECHECK_MS = 10 * 60_000L
-        private const val QUICK_PROBE_INTERVAL_MS = 60_000L
-        private const val QUICK_FAILURES_BEFORE_RECHECK = 2
+        private const val QUICK_PROBE_INTERVAL_MS = 5 * 60_000L
+        private const val QUICK_RETRY_INTERVAL_MS = 30_000L
+        private const val TRAFFIC_CONFIRM_INTERVAL_MS = 10_000L
+        private const val QUICK_FAILURES_BEFORE_RECHECK = 3
+        private const val TRAFFIC_FAILURES_BEFORE_SWITCH = 2
         private const val MAX_SERVICE_CANDIDATES = 8
+        private const val HOT_STANDBY_COUNT = 2
+        private const val MAX_STANDBY_SCAN_CANDIDATES = 6
+        private const val STANDBY_SCAN_INTERVAL_MS = 3 * 60_000L
+        private const val STANDBY_FRESH_MS = 5 * 60_000L
         private const val REFRESH_RETRY_MS = 30 * 60 * 1000L
         const val ACTION_START = "app.butone.vpn.START"
         const val ACTION_STOP = "app.butone.vpn.STOP"

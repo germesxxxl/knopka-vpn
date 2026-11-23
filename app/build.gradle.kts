@@ -12,8 +12,8 @@ android {
         applicationId = "app.butone.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = (System.getenv("VERSION_CODE") ?: "20").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "0.1.20"
+        versionCode = (System.getenv("VERSION_CODE") ?: "21").toInt()
+        versionName = System.getenv("VERSION_NAME") ?: "0.1.21"
     }
 
     flavorDimensions += "device"

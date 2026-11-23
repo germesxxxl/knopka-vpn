@@ -133,18 +133,36 @@ fun MainScreen(status: VpnStatus, onToggle: () -> Unit, onReport: () -> Unit) {
                 }
             }
 
-            Spacer(Modifier.weight(1f))
-            PowerButton(phase, progressOf(status), onToggle)
-            Spacer(Modifier.height(28.dp))
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(Modifier.height(12.dp))
+                PowerButton(phase, progressOf(status), onToggle)
+                Spacer(Modifier.height(20.dp))
 
-            Box(Modifier.height(250.dp), contentAlignment = Alignment.TopCenter) {
-                Crossfade(targetState = phase, animationSpec = tween(400), label = "info") { p ->
-                    Info(p, status)
+                Box(
+                    Modifier.fillMaxWidth().heightIn(min = 250.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    Crossfade(targetState = phase, animationSpec = tween(400), label = "info") { p ->
+                        Info(p, status)
+                    }
                 }
+                Spacer(Modifier.height(12.dp))
             }
 
-            Spacer(Modifier.weight(1f))
-            Ads.provider.Banner(Modifier)
+            // A real adaptive banner must never cover status rows. Reserve its
+            // own measured slot even while PlaceholderAds renders nothing.
+            Box(
+                Modifier.fillMaxWidth().height(64.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Ads.provider.Banner(Modifier.fillMaxWidth())
+            }
         }
     }
 }

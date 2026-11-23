@@ -21,3 +21,10 @@ fetch ru_mobile "Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_mobile_clash_rudirect.ya
 fetch ru_vless_full "Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_clash_rudirect.yaml"
 fetch ru_other  "Export/Clash/RU_DIRECT/BLACK_SS%2BAll_RUS_clash_rudirect.yaml"
 fetch ru_white  "Export/Clash/GLOBAL/WHITE-CIDR-RU-checked-clash-global.yaml"
+
+# MIT-licensed, multi-pass checked global reserve. It is intentionally lazy in
+# ConfigBuilder and is used only after the Russia-tested pools are exhausted.
+curl -fsSL --retry 3 -o "$A/subs/global_reserve.yaml" \
+  "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/fast/clash.yaml"
+grep -q '^proxies:' "$A/subs/global_reserve.yaml" || { echo "bad list: global_reserve" >&2; exit 1; }
+echo "global_reserve: $(grep -c '^  - name:\|^- name:' "$A/subs/global_reserve.yaml" || true) entries"

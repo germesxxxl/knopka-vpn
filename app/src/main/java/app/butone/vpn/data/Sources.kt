@@ -18,6 +18,12 @@ object Sources {
         "https://codeberg.org/igareck/vpn-configs-for-russia/raw/branch/main/$path",
     )
 
+    private fun radikal(path: String) = listOf(
+        "https://raw.githack.com/0xRadikal/Free-v2ray-Configs/main/$path",
+        "https://cdn.jsdelivr.net/gh/0xRadikal/Free-v2ray-Configs@main/$path",
+        "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/$path",
+    )
+
     /**
      * Lists from github.com/igareck/vpn-configs-for-russia: nodes are re-tested
      * from a server in Russia every 2-4 hours. Mihomo's url-test then picks the
@@ -34,5 +40,8 @@ object Sources {
         Source("ru_other", igareck("Export/Clash/RU_DIRECT/BLACK_SS%2BAll_RUS_clash_rudirect.yaml")),
         // Nodes that pass mobile-operator "white list" mode
         Source("ru_white", igareck("Export/Clash/GLOBAL/WHITE-CIDR-RU-checked-clash-global.yaml")),
+        // Independently collected and multi-pass checked nodes. Kept as a
+        // lazy last-resort pool because its tests are not performed in Russia.
+        Source("global_reserve", radikal("fast/clash.yaml")),
     )
 }

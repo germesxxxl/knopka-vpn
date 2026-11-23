@@ -80,7 +80,10 @@ class ServiceHealthChecker(private val proxyPort: Int = ConfigBuilder.MIXED_PORT
             }.onFailure { error = it.javaClass.simpleName }
         }
         val statusOk = if (exactStatus != null) status == exactStatus else status in 200..499
-        val bodyOk = exactStatus == 204 || bytes > 0
+        // A redirect or a 4xx response still proves that the real service was
+        // reached through this node. Some lightweight endpoints intentionally
+        // return an empty 302/403 response, which used to cause false failovers.
+        val bodyOk = exactStatus == 204 || status in 300..499 || bytes > 0
         return Result(service, error.isEmpty() && statusOk && bodyOk, elapsed, error.ifEmpty { "HTTP $status" }, bytes)
     }
 

@@ -19,7 +19,7 @@ object ConfigBuilder {
 
     fun build(sources: List<Source>, secret: String): String {
         val providers = sources.joinToString("\n") { s ->
-            val lazy = s.id == "ru_vless_full"
+            val lazy = s.id == "ru_vless_full" || s.id == "global_reserve"
             """
             |  ${s.id}:
             |    type: file
@@ -72,7 +72,9 @@ object ConfigBuilder {
             |  fake-ip-range: 198.18.0.1/16
             |  fake-ip-filter: ['*.lan', '*.local', 'localhost', '+.pool.ntp.org', 'time.*.com', 'ntp.*.com', '+.msftconnecttest.com', '+.msftncsi.com', '+.stun.*.*', '+.stun.*.*.*']
             |  default-nameserver: [77.88.8.8, 8.8.8.8, 1.1.1.1]
-            |  nameserver: [https://dns.google/dns-query, https://cloudflare-dns.com/dns-query, https://dns.quad9.net/dns-query]
+            |  # DoT has bounded handshakes and remains a fallback when a DoH
+            |  # connection becomes half-open behind a failing proxy transport.
+            |  nameserver: [tls://1.1.1.1, tls://8.8.8.8, https://dns.google/dns-query, https://cloudflare-dns.com/dns-query]
             |  proxy-server-nameserver: [77.88.8.8, 8.8.8.8, 1.1.1.1]
             |  direct-nameserver: [77.88.8.8, 77.88.8.1]
             |

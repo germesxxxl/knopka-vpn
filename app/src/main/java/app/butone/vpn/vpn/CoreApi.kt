@@ -28,6 +28,14 @@ class CoreApi(private val secret: String) {
         val id: String get() = "$provider|$name"
     }
 
+    data class TrafficSnapshot(
+        val uploadTotal: Long,
+        val downloadTotal: Long,
+        val activeProxied: Int,
+        val uploadOnlyProxied: Int,
+        val stalledDnsConnections: Int,
+    )
+
     private data class ProviderSnapshot(
         val candidates: List<Candidate>,
         val total: Int,
@@ -102,19 +110,117 @@ class CoreApi(private val secret: String) {
         throw lastError ?: IOException("all connectivity probes failed")
     }
 
+    /**
+     * A single captive-portal URL can fail while the tunnel is healthy. Require
+     * independent destinations before treating the selected path as alive.
+     */
+    fun probeSelectedQuorum(required: Int = 2): Boolean {
+        var successes = 0
+        for (url in PROBE_URLS) {
+            try {
+                val path = "/proxies/${enc(ConfigBuilder.AUTO_GROUP)}/delay" +
+                    "?url=${enc(url)}&timeout=5000&expected=204"
+                if (JSONObject(get(path)).getInt("delay") > 0) successes++
+                if (successes >= required) return true
+            } catch (_: Exception) {
+                // A quorum deliberately tolerates one failed destination.
+            }
+        }
+        return false
+    }
+
+    /** Tests a provider-owned node without changing the user's AUTO selector. */
+    fun probeCandidate(candidate: Candidate, required: Int = 2): Boolean {
+        var successes = 0
+        for (url in PROBE_URLS) {
+            try {
+                val path = "/providers/proxies/${enc(candidate.provider)}/${enc(candidate.name)}/healthcheck" +
+                    "?url=${enc(url)}&timeout=5000"
+                if (JSONObject(get(path)).getInt("delay") > 0) successes++
+                if (successes >= required) return true
+            } catch (_: Exception) {
+                // The node can disappear during a provider refresh; just skip it.
+            }
+        }
+        return false
+    }
+
     /** Triggers a fresh check of every node in a provider so AUTO can switch away. */
     fun healthCheckProvider(name: String) {
         get("/providers/proxies/${enc(name)}/healthcheck")
     }
 
-    /** Cumulative bytes seen by the tunnel; growth proves that real traffic is flowing. */
-    fun trafficTotal(): Long {
-        val data = connections()
-        return data.optLong("downloadTotal") + data.optLong("uploadTotal")
-    }
-
     /** Raw /connections: totals plus every live connection with its inbound type and chain. */
     fun connections(): JSONObject = JSONObject(get("/connections"))
+
+    /**
+     * Cumulative counters are monotonic for the core lifetime. Per-connection
+     * fields help diagnostics distinguish a quiet phone from an active black hole.
+     */
+    fun trafficSnapshot(selectedNode: String? = null): TrafficSnapshot {
+        val root = connections()
+        val items = root.optJSONArray("connections")
+        var activeProxied = 0
+        var uploadOnly = 0
+        var stalledDns = 0
+        if (items != null) {
+            for (i in 0 until items.length()) {
+                val connection = items.optJSONObject(i) ?: continue
+                val chains = connection.optJSONArray("chains")
+                var throughVpn = false
+                if (chains != null) {
+                    for (j in 0 until chains.length()) {
+                        val chain = chains.optString(j)
+                        if (chain == ConfigBuilder.AUTO_GROUP || chain == selectedNode) {
+                            throughVpn = true
+                            break
+                        }
+                    }
+                }
+                if (!throughVpn) continue
+                activeProxied++
+                val uploaded = connection.optLong("upload")
+                val downloaded = connection.optLong("download")
+                if (uploaded > 0L && downloaded == 0L) {
+                    uploadOnly++
+                    val metadata = connection.optJSONObject("metadata")
+                    val host = metadata?.optString("host").orEmpty().lowercase()
+                    if (host in DNS_HOSTS) stalledDns++
+                }
+            }
+        }
+        return TrafficSnapshot(
+            uploadTotal = root.optLong("uploadTotal"),
+            downloadTotal = root.optLong("downloadTotal"),
+            activeProxied = activeProxied,
+            uploadOnlyProxied = uploadOnly,
+            stalledDnsConnections = stalledDns,
+        )
+    }
+
+    /** Close only connections pinned to the dead node; DIRECT traffic is preserved. */
+    fun closeConnectionsThrough(node: String): Int {
+        val items = connections().optJSONArray("connections") ?: return 0
+        val ids = mutableListOf<String>()
+        for (i in 0 until items.length()) {
+            val connection = items.optJSONObject(i) ?: continue
+            val chains = connection.optJSONArray("chains") ?: continue
+            var usesNode = false
+            for (j in 0 until chains.length()) {
+                if (chains.optString(j) == node) {
+                    usesNode = true
+                    break
+                }
+            }
+            if (usesNode) connection.optString("id").takeIf { it.isNotEmpty() }?.let(ids::add)
+        }
+        var closed = 0
+        for (id in ids) {
+            runCatching { request("DELETE", "/connections/${enc(id)}") }
+                .onSuccess { closed++ }
+        }
+        return closed
+    }
 
     /** Makes a file provider re-read its file, then re-tests its nodes. */
     fun reloadProvider(name: String) {
@@ -170,6 +276,11 @@ class CoreApi(private val secret: String) {
             "https://www.gstatic.com/generate_204",
             "https://cp.cloudflare.com/generate_204",
             "https://connectivitycheck.gstatic.com/generate_204",
+        )
+        private val DNS_HOSTS = setOf(
+            "dns.google",
+            "cloudflare-dns.com",
+            "dns.quad9.net",
         )
 
         /** "Igareck Node 001 | 🇫🇮 Finland， Helsinki | [BL]" -> "🇫🇮 Finland, Helsinki" */

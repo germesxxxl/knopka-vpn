@@ -17,6 +17,7 @@ class NodeReputation(context: Context) {
     fun recordFailure(node: String): Long {
         val key = key(node)
         val failures = prefs.getInt("${key}_failures", 0) + 1
+        val penalty = (prefs.getInt("${key}_penalty", 0) + 2).coerceAtMost(MAX_PENALTY)
         val pause = when (failures) {
             1 -> 2 * 60_000L
             2 -> 30 * 60_000L
@@ -25,6 +26,7 @@ class NodeReputation(context: Context) {
         }
         prefs.edit()
             .putInt("${key}_failures", failures)
+            .putInt("${key}_penalty", penalty)
             .putLong("${key}_until", System.currentTimeMillis() + pause)
             .apply()
         return pause
@@ -32,8 +34,16 @@ class NodeReputation(context: Context) {
 
     fun recordSuccess(node: String) {
         val key = key(node)
-        prefs.edit().putInt("${key}_failures", 0).remove("${key}_until").apply()
+        val penalty = (prefs.getInt("${key}_penalty", 0) - 1).coerceAtLeast(0)
+        prefs.edit()
+            .putInt("${key}_failures", 0)
+            .putInt("${key}_penalty", penalty)
+            .remove("${key}_until")
+            .apply()
     }
+
+    /** Long-term flakiness score; one lucky success no longer erases all history. */
+    fun penalty(node: String): Int = prefs.getInt("${key(node)}_penalty", 0)
 
     private fun cooldownUntil(node: String) = prefs.getLong("${key(node)}_until", 0L)
 
@@ -41,5 +51,9 @@ class NodeReputation(context: Context) {
         val source = EventJournal.networkKind(app) + "|" + node
         val digest = MessageDigest.getInstance("SHA-256").digest(source.toByteArray())
         return digest.take(12).joinToString("") { "%02x".format(it) }
+    }
+
+    companion object {
+        private const val MAX_PENALTY = 20
     }
 }
