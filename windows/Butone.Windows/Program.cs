@@ -5,8 +5,11 @@ namespace Butone.Windows;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
     {
+        if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
+            return SelfTest.Run();
+
         ApplicationConfiguration.Initialize();
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => ShowFatal(e.Exception);
@@ -20,10 +23,11 @@ internal static class Program
                 "butone VPN",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
-            return;
+            return 1;
         }
 
         Application.Run(new MainForm());
+        return 0;
     }
 
     private static bool IsAdministrator()

@@ -112,6 +112,10 @@ jobs:
           foreach ($item in $required) {
             if (-not (Test-Path (Join-Path $stage $item))) { throw "Missing deliverable: $item" }
           }
+          $test = Start-Process -FilePath (Join-Path $stage "ButoneVPN.exe") `
+            -ArgumentList "--self-test" -Wait -PassThru
+          Get-Content (Join-Path $env:TEMP "butone-self-test.log")
+          if ($test.ExitCode -ne 0) { throw "Windows package self-test failed with exit code $($test.ExitCode)" }
           Compress-Archive -Path (Join-Path $stage "*") `
             -DestinationPath (Join-Path $deliverables "butone-windows-11-x64.zip")
           Get-FileHash -Algorithm SHA256 (Join-Path $deliverables "butone-windows-11-x64.zip")
