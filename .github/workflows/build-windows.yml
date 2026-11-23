@@ -1,0 +1,127 @@
+name: Build Windows 11
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "windows/**"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4 * * 1"
+
+permissions:
+  contents: write
+
+env:
+  MIHOMO_VERSION: v1.19.34
+  MIHOMO_WINDOWS_SHA256: f6b855de8722781caea62686f0301f89625fc558d48c1103ffdd98dad7f7f488
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Download and verify bundled server snapshot
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP "bundle"
+          $providers = Join-Path $bundle "providers"
+          $rules = Join-Path $bundle "rules"
+          New-Item -ItemType Directory -Force -Path $providers, $rules | Out-Null
+
+          $ruleRoot = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo"
+          Invoke-WebRequest "$ruleRoot/geosite/category-ru.mrs" -OutFile (Join-Path $rules "category-ru.mrs")
+          Invoke-WebRequest "$ruleRoot/geoip/ru.mrs" -OutFile (Join-Path $rules "geoip-ru.mrs")
+
+          $igareck = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main"
+          $sources = @{
+            "ru_mobile" = "Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_mobile_clash_rudirect.yaml"
+            "ru_vless_full" = "Export/Clash/RU_DIRECT/BLACK_VLESS_RUS_clash_rudirect.yaml"
+            "ru_other" = "Export/Clash/RU_DIRECT/BLACK_SS%2BAll_RUS_clash_rudirect.yaml"
+            "ru_white" = "Export/Clash/GLOBAL/WHITE-CIDR-RU-checked-clash-global.yaml"
+          }
+          foreach ($entry in $sources.GetEnumerator()) {
+            $target = Join-Path $providers ($entry.Key + ".yaml")
+            Invoke-WebRequest "$igareck/$($entry.Value)" -OutFile $target
+            if (-not (Select-String -Quiet -Pattern '^proxies:' -Path $target)) {
+              throw "Invalid provider snapshot: $($entry.Key)"
+            }
+          }
+          $reserve = Join-Path $providers "global_reserve.yaml"
+          Invoke-WebRequest "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/fast/clash.yaml" -OutFile $reserve
+          if (-not (Select-String -Quiet -Pattern '^proxies:' -Path $reserve)) {
+            throw "Invalid provider snapshot: global_reserve"
+          }
+
+      - name: Download verified official Mihomo core
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "mihomo-windows.zip"
+          $expanded = Join-Path $env:RUNNER_TEMP "mihomo"
+          $url = "https://github.com/MetaCubeX/mihomo/releases/download/${env:MIHOMO_VERSION}/mihomo-windows-amd64-${env:MIHOMO_VERSION}.zip"
+          Invoke-WebRequest $url -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $env:MIHOMO_WINDOWS_SHA256) {
+            throw "Mihomo SHA-256 mismatch: $actual"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $core = Get-ChildItem $expanded -Recurse -Filter "mihomo*.exe" | Select-Object -First 1
+          if ($null -eq $core) { throw "Mihomo executable is missing" }
+          Copy-Item $core.FullName (Join-Path $env:RUNNER_TEMP "mihomo.exe")
+          & (Join-Path $env:RUNNER_TEMP "mihomo.exe") -v
+
+      - name: Build self-contained Windows application
+        shell: pwsh
+        run: |
+          $version = "0.1.${{ github.run_number }}"
+          $stage = Join-Path $PWD "windows/build/butone-windows-11"
+          dotnet publish windows/Butone.Windows/Butone.Windows.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:Version=$version `
+            --output $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP "mihomo.exe") $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP "bundle") (Join-Path $stage "bundle") -Recurse
+          Copy-Item LICENSE $stage
+          Copy-Item windows/README-Windows.txt $stage
+
+      - name: Verify and package Windows deliverable
+        shell: pwsh
+        run: |
+          $stage = Join-Path $PWD "windows/build/butone-windows-11"
+          $deliverables = Join-Path $PWD "windows/build/deliverables"
+          New-Item -ItemType Directory -Force -Path $deliverables | Out-Null
+          $required = @(
+            "ButoneVPN.exe",
+            "mihomo.exe",
+            "bundle/providers/ru_mobile.yaml",
+            "bundle/providers/global_reserve.yaml",
+            "bundle/rules/category-ru.mrs",
+            "bundle/rules/geoip-ru.mrs"
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path (Join-Path $stage $item))) { throw "Missing deliverable: $item" }
+          }
+          Compress-Archive -Path (Join-Path $stage "*") `
+            -DestinationPath (Join-Path $deliverables "butone-windows-11-x64.zip")
+          Get-FileHash -Algorithm SHA256 (Join-Path $deliverables "butone-windows-11-x64.zip")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: butone-windows-11
+          path: windows/build/deliverables/butone-windows-11-x64.zip
+
+      - name: Publish Windows release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: windows/build/deliverables/butone-windows-11-x64.zip
