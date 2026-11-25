@@ -74,10 +74,11 @@ private class AdMobScreenAds(private val activity: ComponentActivity) : ScreenAd
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = update()
                 override fun onLost(network: Network) = update()
             }
-            val registered = runCatching { manager.registerDefaultNetworkCallback(callback) }.isSuccess
+            val registered = manager != null &&
+                runCatching { manager.registerDefaultNetworkCallback(callback) }.isSuccess
             update()
             onDispose {
-                if (registered) runCatching { manager.unregisterNetworkCallback(callback) }
+                if (registered) runCatching { manager?.unregisterNetworkCallback(callback) }
             }
         }
         var idle by remember { mutableStateOf(false) }
@@ -186,7 +187,7 @@ private class AdMobScreenAds(private val activity: ComponentActivity) : ScreenAd
     }
 
     private fun hasDirectNetwork(): Boolean {
-        val connectivity = activity.getSystemService(ConnectivityManager::class.java)
+        val connectivity = activity.getSystemService(ConnectivityManager::class.java) ?: return false
         val capabilities = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
