@@ -1,0 +1,73 @@
+name: Android release emulator smoke
+
+on:
+  workflow_run:
+    workflows: [Build APK]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Build APK run ID with a test ads APK
+        type: string
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  smoke:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify source build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id || github.event.workflow_run.id }}
+        run: |
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" | jq -e \
+            --arg repo "$GITHUB_REPOSITORY" \
+            '.path == ".github/workflows/build.yml" and .head_repository.full_name == $repo and .head_branch == "main" and .conclusion == "success"'
+
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run_id || github.event.workflow_run.id }}
+          name: butone-phone-test-ads
+          path: test-build
+
+      - name: Enable emulator KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: ReactiveCircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: '36'
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: python3 scripts/android-release-smoke.py test-build/butone-phone-ads-test.apk android-smoke
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: butone-android-emulator-evidence
+          path: |
+            android-smoke/*.png
+            android-smoke/*.mp4
+            android-smoke/*.txt
+          if-no-files-found: warn
