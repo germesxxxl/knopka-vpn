@@ -1,5 +1,6 @@
 package app.butone.vpn.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.Intent
 import android.widget.Toast
@@ -10,7 +11,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.butone.vpn.ads.createAds
 import app.butone.vpn.vpn.ButoneVpnService
@@ -42,6 +46,9 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK && VpnDisclosureConsent.isAccepted(this)) connect()
         }
+
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private val saveReport =
         registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -152,6 +159,15 @@ class MainActivity : ComponentActivity() {
 
     private fun connect() {
         ButoneVpnService.start(this)
+        val prefs = getSharedPreferences("app", Context.MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            !prefs.getBoolean("notification_permission_asked", false) &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            prefs.edit().putBoolean("notification_permission_asked", true).apply()
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     private fun openPrivacy() {

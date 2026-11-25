@@ -26,6 +26,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Ensure Android API 36
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          if [ ! -f "$sdk_root/platforms/android-36/android.jar" ]; then
+            manager="$(find "$sdk_root/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+            [ -n "$manager" ] || { echo "Android SDK manager not found under $sdk_root"; exit 1; }
+            "$manager" --sdk_root="$sdk_root" 'platforms;android-36'
+          fi
+          test -s "$sdk_root/platforms/android-36/android.jar"
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
@@ -40,7 +50,15 @@ jobs:
             -in catalog/catalog.json
           python3 -m json.tool catalog/catalog.json > /dev/null
 
+      - name: Restore Android core
+        uses: actions/cache/restore@v4
+        id: core-cache
+        with:
+          path: app/libs/core.aar
+          key: core-android-v1-${{ runner.os }}-${{ env.MIHOMO_VERSION }}-${{ hashFiles('core/*.go', 'core/go.mod') }}
+
       - name: Build Mihomo core (gomobile AAR)
+        if: steps.core-cache.outputs.cache-hit != 'true'
         working-directory: core
         run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
@@ -56,6 +74,13 @@ jobs:
             -androidapi 26 \
             -target android/arm64,android/arm,android/amd64 \
             -o ../app/libs/core.aar .
+
+      - name: Save validated Android core
+        if: steps.core-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/libs/core.aar
+          key: ${{ steps.core-cache.outputs.cache-primary-key }}
 
       - name: Bundle rule sets and server snapshot
         run: bash scripts/fetch-assets.sh
@@ -79,9 +104,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
-
-      - name: Install Android API 36
-        run: sdkmanager 'platforms;android-36'
 
       - name: Build APK
         env:
