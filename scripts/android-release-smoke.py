@@ -18,9 +18,11 @@ VIDEO = "/sdcard/butone-consent-smoke.mp4"
 
 
 def adb(*args, timeout=20):
-    return subprocess.run(
-        ["adb", *args], check=True, capture_output=True, timeout=timeout
-    ).stdout
+    result = subprocess.run(["adb", *args], capture_output=True, timeout=timeout)
+    if result.returncode:
+        print((result.stdout + result.stderr).decode(errors="replace"), flush=True)
+        result.check_returncode()
+    return result.stdout
 
 
 def nodes_on_screen():
@@ -96,8 +98,8 @@ def run_smoke(apk, output):
         raise AssertionError(f"Expected Android API 36 emulator, got SDK {sdk} on {serial}")
 
     adb("install", "-r", str(apk), timeout=90)
-    adb("shell", "am", "start", "-W", "-a", "android.intent.action.MAIN",
-        "-c", "android.intent.category.LAUNCHER", "-p", PACKAGE, timeout=30)
+    adb("shell", "am", "start", "-W", "-n",
+        f"{PACKAGE}/app.butone.vpn.PhoneLauncher", timeout=30)
     by_label(MAIN_TITLE)
     by_label("Конфиденциальность")
     screenshot(output / "01-main.png")
