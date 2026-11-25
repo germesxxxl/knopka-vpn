@@ -5,6 +5,11 @@ plugins {
 }
 
 val adsMode = System.getenv("BUTONE_ADS_MODE").orEmpty().ifEmpty { "off" }
+val playBundle = providers.gradleProperty("playBundle").orNull == "true"
+if (playBundle) {
+    require(adsMode != "test") { "Test ads must not be packaged for Play" }
+    layout.buildDirectory.set(layout.projectDirectory.dir("build/play-bundle"))
+}
 require(adsMode in setOf("off", "test", "live")) { "Invalid BUTONE_ADS_MODE" }
 val sampleApp = "ca-app-pub-3940256099942544~3347511713"
 val sampleBanner = "ca-app-pub-3940256099942544/9214589741"
@@ -99,7 +104,7 @@ android {
 
     splits {
         abi {
-            isEnable = true
+            isEnable = !playBundle
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = true
