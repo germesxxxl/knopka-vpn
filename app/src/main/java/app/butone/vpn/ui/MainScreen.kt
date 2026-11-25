@@ -58,7 +58,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.butone.vpn.R
-import app.butone.vpn.ads.Ads
 import app.butone.vpn.vpn.ConnectionProgress
 import app.butone.vpn.vpn.ConnectionStage
 import app.butone.vpn.vpn.ServiceAvailability
@@ -92,7 +91,12 @@ private fun progressOf(s: VpnStatus): ConnectionProgress? = when (s) {
 }
 
 @Composable
-fun MainScreen(status: VpnStatus, onToggle: () -> Unit, onReport: () -> Unit) {
+fun MainScreen(
+    status: VpnStatus,
+    onToggle: () -> Unit,
+    onReport: () -> Unit,
+    footer: @Composable () -> Unit = {},
+) {
     val phase = phaseOf(status)
     val anim = tween<Color>(700)
     val bgTop by animateColorAsState(
@@ -155,14 +159,7 @@ fun MainScreen(status: VpnStatus, onToggle: () -> Unit, onReport: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
             }
 
-            // A real adaptive banner must never cover status rows. Reserve its
-            // own measured slot even while PlaceholderAds renders nothing.
-            Box(
-                Modifier.fillMaxWidth().height(64.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Ads.provider.Banner(Modifier.fillMaxWidth())
-            }
+            footer()
         }
     }
 }
@@ -556,20 +553,24 @@ fun ReportDialog(
 }
 
 @Composable
-fun Disclaimer(onAccept: () -> Unit) {
+fun VpnDisclosure(onAccept: () -> Unit, onDecline: () -> Unit, onPrivacy: () -> Unit) {
     AlertDialog(
-        onDismissRequest = {},
-        confirmButton = { TextButton(onClick = onAccept) { Text("Понятно") } },
-        title = { Text("Перед началом") },
+        onDismissRequest = onDecline,
+        confirmButton = { TextButton(onClick = onAccept) { Text("Разрешить VPN") } },
+        dismissButton = { TextButton(onClick = onDecline) { Text("Не сейчас") } },
+        title = { Text("Как butone использует VPN") },
         text = {
-            Text(
-                "Приложение подключается к бесплатным публичным серверам из открытых списков. " +
-                    "Мы не владеем ими и не можем гарантировать их скорость и надёжность.\n\n" +
-                    "Российские сайты (банки, Госуслуги, маркетплейсы) открываются напрямую, " +
-                    "мимо этих серверов.\n\n" +
-                    "Не вводите пароли на сайтах без значка замка и не устанавливайте " +
-                    "сертификаты по чьей-либо просьбе."
-            )
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "Чтобы направлять трафик, Android передаёт butone сетевые пакеты приложений. " +
+                        "Трафик вне правил прямого доступа передаётся по зашифрованному соединению " +
+                        "на публичный VPN-сервер, которым управляет третья сторона. " +
+                        "Оператор сервера может видеть ваш IP-адрес, адреса назначений и содержимое " +
+                        "незащищённых протоколов. Российские и локальные ресурсы по правилам маршрутизации идут напрямую.\n\n" +
+                        "butone не сохраняет историю сайтов в отчётах и не использует VPN-трафик для рекламы."
+                )
+                TextButton(onClick = onPrivacy) { Text("Политика конфиденциальности") }
+            }
         },
     )
 }

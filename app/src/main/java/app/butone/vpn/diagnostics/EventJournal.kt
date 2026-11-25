@@ -35,7 +35,7 @@ class EventJournal(context: Context) {
                 .put("message", clean(message, 500))
                 .put("network", networkKind(app))
             fields.forEach { (key, value) ->
-                if (key.lowercase() !in SECRET_KEYS) {
+                if (key.lowercase() !in PRIVATE_KEYS) {
                     item.put(clean(key, 40), clean(value?.toString().orEmpty(), 500))
                 }
             }
@@ -89,9 +89,9 @@ class EventJournal(context: Context) {
                 val at = item.optLong("at")
                 if (at < since) return@forEach
                 val type = item.optString("type")
-                val message = item.optString("message")
+                val message = if (type == "crash") "Сбой приложения" else item.optString("message")
                 val keys = item.keys().asSequence()
-                    .filterNot { it in setOf("at", "type", "message") }
+                    .filterNot { it in setOf("at", "type", "message") || it.lowercase() in PRIVATE_KEYS }
                     .toList()
                 writer.append(TIME_FORMAT.format(Date(at)))
                     .append("  ").append(type)
@@ -131,7 +131,7 @@ class EventJournal(context: Context) {
         private const val MAX_REPORT_CHARS = 1_500_000
         private val DAY_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         private val TIME_FORMAT = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-        private val SECRET_KEYS = setOf("uuid", "password", "secret", "token", "key")
+        private val PRIVATE_KEYS = setOf("uuid", "password", "secret", "token", "key", "error", "stack", "thread", "status")
 
         private fun clean(value: String, max: Int): String = value
             .replace(Regex("[\\r\\n\\t]+"), " ")

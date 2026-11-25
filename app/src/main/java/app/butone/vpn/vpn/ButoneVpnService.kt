@@ -61,6 +61,10 @@ class ButoneVpnService : VpnService() {
             scope.launch { lock.withLock { stopVpnLocked() } }
             return START_NOT_STICKY
         }
+        if (!VpnDisclosureConsent.isAccepted(this)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         // ACTION_START, or the system starting us for always-on VPN.
         startForegroundCompat(notification(getString(R.string.app_name), "Подключение…"))
         journal.record("vpn_start", "Запуск VPN")
@@ -864,6 +868,7 @@ class ButoneVpnService : VpnService() {
         const val ACTION_STOP = "app.butone.vpn.STOP"
 
         fun start(context: Context) {
+            if (!VpnDisclosureConsent.isAccepted(context)) return
             ContextCompat.startForegroundService(
                 context, Intent(context, ButoneVpnService::class.java).setAction(ACTION_START)
             )

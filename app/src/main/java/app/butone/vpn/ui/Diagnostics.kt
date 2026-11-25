@@ -37,7 +37,7 @@ object Diagnostics {
         writer.appendLine("butone ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         writer.appendLine("Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
         writer.appendLine("Core: ${runCatching { Core.version() }.getOrDefault("?")}, running=${runCatching { Core.isRunning() }.getOrDefault(false)}")
-        writer.appendLine("Status: ${VpnState.status.value}")
+        writer.appendLine("Status: ${VpnState.status.value.javaClass.simpleName}")
         writer.appendLine("Network: ${EventJournal.networkKind(context)}")
         writer.appendLine("Installed/journal since: ${Date(journal.installedAt)}")
         writer.appendLine("Journal size: ${journal.retainedBytes() / 1024} KB")
@@ -62,31 +62,19 @@ object Diagnostics {
                 // Destinations and browsing domains are deliberately omitted from exported reports.
                 writer.appendLine("Connections: $count by inbound $byType")
             } catch (e: Exception) {
-                writer.appendLine("API error: ${redact(e.toString())}")
+                writer.appendLine("API error: ${e.javaClass.simpleName}")
             }
         } else {
             writer.appendLine("Core API: not running")
         }
 
         writer.appendLine()
-        writer.appendLine("---- core log (last 120, addresses redacted) ----")
-        val log = runCatching { Core.logs() }.getOrDefault("")
-        log.lines().takeLast(120).forEach { writer.appendLine(redact(it)) }
-        writer.appendLine()
         writer.appendLine("---- persistent event journal ----")
         journal.writeTo(writer, days)
     }
-
-    private fun redact(value: String): String = value
-        .replace(UUID_REGEX, "<id>")
-        .replace(IPV4_REGEX, "<ip>")
-        .replace(AUTHORITY_REGEX, "${'$'}1<credentials>@")
 
     private fun kb(bytes: Long) = "${bytes / 1024} KB"
 
     private const val DAY_MS = 24L * 60 * 60 * 1000
     private val FILE_TIME_FORMAT = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
-    private val UUID_REGEX = Regex("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b")
-    private val IPV4_REGEX = Regex("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])")
-    private val AUTHORITY_REGEX = Regex("(://)[^/@\\s]+@")
 }

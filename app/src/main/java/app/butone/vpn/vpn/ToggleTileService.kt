@@ -32,7 +32,7 @@ class ToggleTileService : TileService() {
         when {
             VpnState.isActive -> ButoneVpnService.stop(this)
             // VPN permission not granted yet: it can only be requested from an activity.
-            VpnService.prepare(this) != null -> openApp()
+            !VpnDisclosureConsent.isAccepted(this) || VpnService.prepare(this) != null -> openApp()
             else -> ButoneVpnService.start(this)
         }
     }

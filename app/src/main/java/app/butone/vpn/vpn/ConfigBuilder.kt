@@ -1,5 +1,6 @@
 package app.butone.vpn.vpn
 
+import app.butone.vpn.BuildConfig
 import app.butone.vpn.data.Source
 
 /**
@@ -37,6 +38,7 @@ object ConfigBuilder {
             """.trimMargin()
         }
         val use = sources.joinToString(", ") { it.id }
+        val emptyFallback = if (BuildConfig.IS_TV) "COMPATIBLE" else "REJECT"
 
         return """
             |mixed-port: $MIXED_PORT
@@ -93,6 +95,7 @@ object ConfigBuilder {
             |proxy-groups:
             |  - name: $AUTO_GROUP
             |    type: select
+            |    empty-fallback: $emptyFallback
             |    use: [$use]
             |
             |rule-providers:

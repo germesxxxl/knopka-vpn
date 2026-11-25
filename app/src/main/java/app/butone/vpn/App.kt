@@ -3,7 +3,6 @@ package app.butone.vpn
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import app.butone.vpn.ads.Ads
 import app.butone.vpn.diagnostics.EventJournal
 
 class App : Application() {
@@ -19,12 +18,11 @@ class App : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             journal.record(
                 "crash",
-                "${error.javaClass.simpleName}: ${error.message.orEmpty()}",
-                mapOf("thread" to thread.name, "stack" to error.stackTrace.take(8).joinToString(" <- ")),
+                "Сбой приложения",
+                mapOf("exception" to error.javaClass.simpleName),
             )
             previousHandler?.uncaughtException(thread, error)
         }
-        Ads.provider.init(this)
     }
 
     companion object {

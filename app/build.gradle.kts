@@ -4,14 +4,31 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val adsMode = System.getenv("BUTONE_ADS_MODE").orEmpty().ifEmpty { "off" }
+require(adsMode in setOf("off", "test", "live")) { "Invalid BUTONE_ADS_MODE" }
+val sampleApp = "ca-app-pub-3940256099942544~3347511713"
+val sampleBanner = "ca-app-pub-3940256099942544/9214589741"
+val sampleReward = "ca-app-pub-3940256099942544/5224354917"
+val adsApp = if (adsMode == "live") System.getenv("ADMOB_APP_ID").orEmpty() else sampleApp
+val adsBanner = if (adsMode == "live") System.getenv("ADMOB_BANNER_ID").orEmpty() else sampleBanner
+val adsReward = if (adsMode == "live") System.getenv("ADMOB_REWARDED_ID").orEmpty() else sampleReward
+if (adsMode == "live") {
+    require(Regex("ca-app-pub-[0-9]{16}~[0-9]+").matches(adsApp)) { "Invalid ADMOB_APP_ID" }
+    val unitPattern = Regex("ca-app-pub-[0-9]{16}/[0-9]+")
+    require(unitPattern.matches(adsBanner) && unitPattern.matches(adsReward) &&
+        adsBanner != adsReward && listOf(adsBanner, adsReward).all { it.substringBefore('/') == adsApp.substringBefore('~') } &&
+        !adsApp.startsWith("ca-app-pub-3940256099942544")
+    ) { "Live ad units must be distinct, real and owned by the configured publisher" }
+}
+
 android {
     namespace = "app.butone.vpn"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "app.butone.vpn"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = (System.getenv("VERSION_CODE") ?: "21").toInt()
         versionName = System.getenv("VERSION_NAME") ?: "0.1.21"
     }
@@ -23,9 +40,19 @@ android {
             buildConfigField("boolean", "IS_TV", "false")
             manifestPlaceholders["phoneLauncherEnabled"] = "true"
             manifestPlaceholders["tvLauncherEnabled"] = "false"
+            manifestPlaceholders["adMobAppId"] = adsApp
+            buildConfigField("boolean", "ADS_ENABLED", (adsMode != "off").toString())
+            buildConfigField("boolean", "ADS_TEST", (adsMode == "test").toString())
+            buildConfigField("String", "AD_BANNER_ID", "\"$adsBanner\"")
+            buildConfigField("String", "AD_REWARDED_ID", "\"$adsReward\"")
+            if (adsMode == "test") {
+                applicationIdSuffix = ".adstest"
+                versionNameSuffix = "-ads-test"
+            }
         }
         create("tv") {
             dimension = "device"
+            targetSdk = 35
             applicationIdSuffix = ".tv"
             versionNameSuffix = "-tv"
             buildConfigField("boolean", "IS_TV", "true")
@@ -101,4 +128,6 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    add("phoneImplementation", "com.google.android.gms:play-services-ads:25.5.0")
+    add("phoneImplementation", "com.google.android.ump:user-messaging-platform:4.0.0")
 }

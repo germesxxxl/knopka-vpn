@@ -80,6 +80,9 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
+      - name: Install Android API 36
+        run: sdkmanager 'platforms;android-36'
+
       - name: Build APK
         env:
           VERSION_CODE: ${{ github.run_number }}
@@ -101,6 +104,59 @@ jobs:
             app/build/deliverables/butone-phone-arm64.apk
           cp app/build/outputs/apk/tv/${{ steps.sign.outputs.dir }}/*universal*.apk \
             app/build/deliverables/butone-google-tv-universal.apk
+
+      - name: Create and verify signed Google Play bundle
+        if: steps.sign.outputs.dir == 'release'
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.1.{0}', github.run_number) }}
+          KEYSTORE_PATH: ${{ steps.sign.outputs.path }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          BUTONE_ADS_MODE: ${{ vars.BUTONE_LIVE_ADS == 'true' && 'live' || 'off' }}
+          ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID }}
+          ADMOB_BANNER_ID: ${{ vars.ADMOB_BANNER_ID }}
+          ADMOB_REWARDED_ID: ${{ vars.ADMOB_REWARDED_ID }}
+        run: |
+          gradle --no-daemon :app:bundlePhoneRelease
+          bundle=app/build/outputs/bundle/phoneRelease/app-phone-release.aab
+          jarsigner -verify "$bundle"
+          keytool -printcert -jarfile "$bundle" | grep SHA256
+          python3 scripts/check-aab-alignment.py "$bundle"
+          mkdir -p app/build/play
+          cp "$bundle" "app/build/play/butone-phone-${BUTONE_ADS_MODE}.aab"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.sign.outputs.dir == 'release'
+        with:
+          name: butone-google-play-aab
+          path: app/build/play/*.aab
+          if-no-files-found: error
+
+      - name: Build separate APK with Google test ads
+        if: github.event_name != 'schedule' && !startsWith(github.ref, 'refs/tags/')
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: ${{ format('0.1.{0}', github.run_number) }}
+          KEYSTORE_PATH: ${{ steps.sign.outputs.path }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          BUTONE_ADS_MODE: test
+        run: |
+          if [ -z "$KEYSTORE_PATH" ]; then unset KEYSTORE_PATH; fi
+          gradle --no-daemon :app:assemblePhone${{ steps.sign.outputs.dir == 'release' && 'Release' || 'Debug' }}
+          mkdir -p app/build/test-ads
+          cp app/build/outputs/apk/phone/${{ steps.sign.outputs.dir }}/*universal*.apk \
+            app/build/test-ads/butone-phone-ads-test.apk
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'schedule' && !startsWith(github.ref, 'refs/tags/')
+        with:
+          name: butone-phone-test-ads
+          path: app/build/test-ads/*.apk
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:

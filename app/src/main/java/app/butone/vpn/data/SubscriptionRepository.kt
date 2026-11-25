@@ -2,10 +2,12 @@ package app.butone.vpn.data
 
 import android.content.Context
 import android.util.Log
+import app.butone.vpn.BuildConfig
 import core.Core
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -44,6 +46,7 @@ class SubscriptionRepository(private val context: Context) {
 
         return sources.filter { source ->
             val file = providerFile(source)
+            if (!BuildConfig.IS_TV) return@filter prepareEncrypted(source, file)
             if (!isValid(file)) {
                 // An asset snapshot has no network freshness timestamp, so it
                 // will be refreshed during this first active session.
@@ -85,28 +88,14 @@ class SubscriptionRepository(private val context: Context) {
                 conn.setRequestProperty("User-Agent", "clash.meta")
                 val body = try {
                     if (conn.responseCode != 200) continue
-                    conn.inputStream.use { input ->
-                        val output = ByteArrayOutputStream()
-                        val buffer = ByteArray(16 * 1024)
-                        var total = 0
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            total += count
-                            if (total > MAX_DOWNLOAD_BYTES) {
-                                throw IOException("provider exceeds $MAX_DOWNLOAD_BYTES bytes")
-                            }
-                            output.write(buffer, 0, count)
-                        }
-                        output.toByteArray()
-                    }
+                    conn.inputStream.use(::readProvider)
                 } finally {
                     conn.disconnect()
                 }
-                if (!isValid(body)) continue
+                val prepared = prepareProvider(body) ?: continue
 
                 val candidate = File(providerDir, "${source.id}.download")
-                candidate.writeBytes(body)
+                candidate.writeBytes(prepared)
                 return PendingUpdate(source, candidate)
             } catch (e: Exception) {
                 Log.w(TAG, "download ${source.id} from $url failed: $e")
@@ -169,6 +158,57 @@ class SubscriptionRepository(private val context: Context) {
     private fun isValid(body: ByteArray): Boolean = runCatching {
         Core.validateProvider(String(body, Charsets.UTF_8))
     }.isSuccess
+
+    private fun prepareProvider(body: ByteArray): ByteArray? {
+        if (body.isEmpty() || body.size > MAX_DOWNLOAD_BYTES) return null
+        if (BuildConfig.IS_TV) return body.takeIf(::isValid)
+        return runCatching {
+            Core.filterEncryptedProvider(String(body, Charsets.UTF_8)).toByteArray(Charsets.UTF_8)
+        }.getOrNull()
+    }
+
+    /** Revalidates an older cache before letting the phone core open it. */
+    private fun prepareEncrypted(source: Source, file: File): Boolean = runCatching {
+        val cached = file.takeIf { it.isFile && it.length() in 1L..MAX_DOWNLOAD_BYTES.toLong() }
+            ?.readBytes()
+        if (cached != null) {
+            val approvedCache = prepareProvider(cached)
+            if (approvedCache != null) {
+                if (!approvedCache.contentEquals(cached)) writeProviderAtomically(file, approvedCache)
+                return@runCatching true
+            }
+        }
+        val asset = context.assets.open("subs/${source.id}.yaml").use(::readProvider)
+        val approvedAsset = prepareProvider(asset) ?: return@runCatching false
+        writeProviderAtomically(file, approvedAsset)
+        // The bundled snapshot has no network freshness timestamp.
+        stampFile(source).delete()
+        true
+    }.onFailure { Log.w(TAG, "Could not prepare encrypted provider ${source.id}", it) }
+        .getOrDefault(false)
+
+    private fun readProvider(input: InputStream): ByteArray {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) return output.toByteArray()
+            if (output.size() + count > MAX_DOWNLOAD_BYTES) {
+                throw IOException("provider exceeds $MAX_DOWNLOAD_BYTES bytes")
+            }
+            output.write(buffer, 0, count)
+        }
+    }
+
+    private fun writeProviderAtomically(file: File, data: ByteArray) {
+        val candidate = File(providerDir, "${file.name}.prepared")
+        try {
+            candidate.writeBytes(data)
+            moveReplacing(candidate, file)
+        } finally {
+            candidate.delete()
+        }
+    }
 
     private fun copyAsset(assetPath: String, target: File, overwrite: Boolean) {
         if (target.exists() && !overwrite) return
